@@ -8,7 +8,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 raw_database_url = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:AnaghaOPS2210@db.ncqspuxvxkqvuhbdazba.supabase.co:5432/postgres",
+    "postgresql://postgres.ncqspuxvxkqvuhbdazba:AnaghaOPS2210@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres"
 )
 DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "ops-schema")
 
