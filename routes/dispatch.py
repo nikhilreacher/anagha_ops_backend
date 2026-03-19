@@ -1,5 +1,5 @@
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from database import SessionLocal
@@ -11,6 +11,13 @@ def db():
     d=SessionLocal()
     try: yield d
     finally: d.close()
+
+
+def parse_datetime_as_naive_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def resolve_beat_value(database, beat: str):
@@ -119,8 +126,8 @@ def add_dispatch_credit(
     if database.query(Ledger).filter(Ledger.bill_no == bill_no).first():
         raise HTTPException(status_code=400, detail="Bill number already exists")
 
-    parsed_bill_date = datetime.fromisoformat(bill_date)
-    parsed_paid_date = datetime.fromisoformat(paid_date) if paid_date else None
+    parsed_bill_date = parse_datetime_as_naive_utc(bill_date)
+    parsed_paid_date = parse_datetime_as_naive_utc(paid_date) if paid_date else None
 
     ledger = Ledger(
         bill_no=bill_no,

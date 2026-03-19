@@ -13,7 +13,7 @@ from models import (
     SalaryPayment,
     MOCEntry,
 )
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 router = APIRouter()
 
@@ -34,6 +34,14 @@ def db():
     d=SessionLocal()
     try: yield d
     finally: d.close()
+
+
+def coerce_naive_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 @router.get("/credit")
 def credit(database=Depends(db)):
@@ -58,13 +66,14 @@ def credit(database=Depends(db)):
         for row in ledger_rows:
             balance = row.balance or 0
             total += balance
-            age = (datetime.utcnow() - row.bill_date).days if row.bill_date else 0
+            bill_date = coerce_naive_utc(row.bill_date)
+            age = (datetime.utcnow() - bill_date).days if bill_date else 0
             max_age = max(max_age, age)
             bills.append(
                 {
                     "bill_no": row.bill_no,
-                    "bill_date": row.bill_date.date().isoformat() if row.bill_date else None,
-                    "delivery_date": row.delivery_date.date().isoformat() if row.delivery_date else None,
+                    "bill_date": bill_date.date().isoformat() if bill_date else None,
+                    "delivery_date": coerce_naive_utc(row.delivery_date).date().isoformat() if row.delivery_date else None,
                     "balance": balance,
                     "remarks": row.remarks,
                 }
