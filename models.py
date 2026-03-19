@@ -11,7 +11,7 @@ class Route(Base):
     __tablename__ = "routes"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String)
 
 
@@ -19,7 +19,7 @@ class Shop(Base):
     __tablename__ = "shops"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String)
     phone = Column(String)
     address = Column(String)
@@ -32,7 +32,7 @@ class Invoice(Base):
     __tablename__ = "invoices"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     shop_id = Column(Integer)
     bill_no = Column(String)
     amount = Column(Float)
@@ -44,7 +44,7 @@ class Dispatch(Base):
     __tablename__ = "dispatches"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     beat = Column(String, nullable=False)
     total_bills = Column(Integer, nullable=False)
     total_cases = Column(Integer, nullable=False)
@@ -62,7 +62,7 @@ class ReturnTask(Base):
     __tablename__ = "return_tasks"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     dispatch_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.dispatches.id"), nullable=False)
     beat = Column(String, nullable=True)
     route_label = Column(String, nullable=True)
@@ -75,7 +75,7 @@ class StockEntry(Base):
     __tablename__ = "stock_entries"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     stock_date = Column(DateTime, nullable=False)
     stock_count = Column(Float, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -104,7 +104,7 @@ class Expense(Base):
     __tablename__ = "expenses"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     expense_date = Column(DateTime, nullable=False)
     expense_type = Column(String, nullable=False)
     note = Column(String, nullable=True)
@@ -116,7 +116,7 @@ class Employee(Base):
     __tablename__ = "employees"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)
     role = Column(String, nullable=False)
     phone = Column(String, nullable=True)
@@ -128,7 +128,7 @@ class EmployeeAdvance(Base):
     __tablename__ = "employee_advances"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     employee_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.employees.id"), nullable=False)
     advance_date = Column(DateTime, nullable=False)
     amount = Column(Float, nullable=False)
@@ -140,7 +140,7 @@ class SalaryPayment(Base):
     __tablename__ = "salary_payments"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     employee_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.employees.id"), nullable=False)
     payment_date = Column(DateTime, nullable=False)
     present_days = Column(Float, nullable=False)
@@ -155,7 +155,7 @@ class MOCEntry(Base):
     __tablename__ = "moc_entries"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     moc_month = Column(DateTime, nullable=False)
     total_sales = Column(Float, nullable=False)
     total_discount = Column(Float, nullable=False)
@@ -166,7 +166,7 @@ class AppUser(Base):
     __tablename__ = "app_users"
     __table_args__ = {"schema": SCHEMA_NAME}
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String, nullable=False, unique=True)
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False)
