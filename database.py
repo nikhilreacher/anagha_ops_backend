@@ -10,7 +10,6 @@ raw_database_url = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres.ncqspuxvxkqvuhbdazba:AnaghaOPS2210@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres"
 )
-DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "ops-schema")
 
 
 def normalize_database_url(database_url: str) -> str:
@@ -27,9 +26,6 @@ DATABASE_URL = normalize_database_url(raw_database_url)
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
-    connect_args={
-        "options": f'-csearch_path="{DATABASE_SCHEMA}",public',
-    },
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

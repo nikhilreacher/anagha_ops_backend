@@ -4,9 +4,12 @@ from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
 
 from database import Base
 
+SCHEMA_NAME = "ops-schema"
+
 
 class Route(Base):
     __tablename__ = "routes"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     name = Column(String)
@@ -14,6 +17,7 @@ class Route(Base):
 
 class Shop(Base):
     __tablename__ = "shops"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     name = Column(String)
@@ -26,6 +30,7 @@ class Shop(Base):
 
 class Invoice(Base):
     __tablename__ = "invoices"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     shop_id = Column(Integer)
@@ -37,6 +42,7 @@ class Invoice(Base):
 
 class Dispatch(Base):
     __tablename__ = "dispatches"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     beat = Column(String, nullable=False)
@@ -54,9 +60,10 @@ class Dispatch(Base):
 
 class ReturnTask(Base):
     __tablename__ = "return_tasks"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
-    dispatch_id = Column(Integer, ForeignKey("dispatches.id"), nullable=False)
+    dispatch_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.dispatches.id"), nullable=False)
     beat = Column(String, nullable=True)
     route_label = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -66,6 +73,7 @@ class ReturnTask(Base):
 
 class StockEntry(Base):
     __tablename__ = "stock_entries"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     stock_date = Column(DateTime, nullable=False)
@@ -75,10 +83,11 @@ class StockEntry(Base):
 
 class Ledger(Base):
     __tablename__ = "ledger"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     bill_no = Column(String, primary_key=True)
-    dispatch_id = Column(Integer, ForeignKey("dispatches.id"), nullable=True)
-    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=True)
+    dispatch_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.dispatches.id"), nullable=True)
+    shop_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.shops.id"), nullable=True)
     party = Column(String, nullable=False)
     bill_date = Column(DateTime, nullable=True)
     delivery_date = Column(DateTime, nullable=True)
@@ -93,6 +102,7 @@ class Ledger(Base):
 
 class Expense(Base):
     __tablename__ = "expenses"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     expense_date = Column(DateTime, nullable=False)
@@ -104,6 +114,7 @@ class Expense(Base):
 
 class Employee(Base):
     __tablename__ = "employees"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
@@ -115,9 +126,10 @@ class Employee(Base):
 
 class EmployeeAdvance(Base):
     __tablename__ = "employee_advances"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
-    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    employee_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.employees.id"), nullable=False)
     advance_date = Column(DateTime, nullable=False)
     amount = Column(Float, nullable=False)
     note = Column(String, nullable=True)
@@ -126,9 +138,10 @@ class EmployeeAdvance(Base):
 
 class SalaryPayment(Base):
     __tablename__ = "salary_payments"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
-    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    employee_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.employees.id"), nullable=False)
     payment_date = Column(DateTime, nullable=False)
     present_days = Column(Float, nullable=False)
     absent_days = Column(Float, nullable=False)
@@ -140,6 +153,7 @@ class SalaryPayment(Base):
 
 class MOCEntry(Base):
     __tablename__ = "moc_entries"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     moc_month = Column(DateTime, nullable=False)
@@ -150,6 +164,7 @@ class MOCEntry(Base):
 
 class AppUser(Base):
     __tablename__ = "app_users"
+    __table_args__ = {"schema": SCHEMA_NAME}
 
     id = Column(Integer, primary_key=True)
     username = Column(String, nullable=False, unique=True)
