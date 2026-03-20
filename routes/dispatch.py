@@ -210,40 +210,35 @@ def dispatch_shops(dispatch_id: int, database=Depends(db)):
 
     dispatch_beats = get_dispatch_beats(database, dispatch)
     shops = database.query(Shop).filter(Shop.beat.in_(dispatch_beats)).all()
+    shop_ids = [shop.id for shop in shops]
+    ledger_rows = (
+        database.query(Ledger)
+        .filter(Ledger.shop_id.in_(shop_ids) if shop_ids else False)
+        .filter(Ledger.balance.isnot(None))
+        .filter(Ledger.balance > 0)
+        .order_by(Ledger.shop_id.asc(), Ledger.bill_date.asc(), Ledger.bill_no.asc())
+        .all()
+    )
+
+    bills_by_shop_id = {}
+    totals_by_shop_id = {}
+    for row in ledger_rows:
+        balance = row.balance or 0
+        bills_by_shop_id.setdefault(row.shop_id, []).append(
+            {
+                "bill_no": row.bill_no,
+                "bill_date": str(row.bill_date.date()) if row.bill_date else None,
+                "delivery_date": str(row.delivery_date.date()) if row.delivery_date else None,
+                "balance": balance,
+                "remarks": row.remarks,
+            }
+        )
+        totals_by_shop_id[row.shop_id] = (totals_by_shop_id.get(row.shop_id, 0) or 0) + balance
 
     res = []
     for shop in shops:
-        ledger_rows = (
-            database.query(Ledger)
-            .filter(Ledger.shop_id == shop.id)
-            .filter(Ledger.balance.isnot(None))
-            .filter(Ledger.balance > 0)
-            .all()
-        )
-
-        bills = []
-        total = 0
-
-        for row in ledger_rows:
-            balance = row.balance or 0
-            total += balance
-            bills.append(
-                {
-                    "bill_no": row.bill_no,
-                    "bill_date": str(row.bill_date.date()) if row.bill_date else None,
-                    "delivery_date": str(row.delivery_date.date()) if row.delivery_date else None,
-                    "balance": balance,
-                    "remarks": row.remarks,
-                }
-            )
-
-        bills.sort(
-            key=lambda item: (
-                item["bill_date"] is None,
-                item["bill_date"] or "",
-                item["bill_no"],
-            )
-        )
+        bills = bills_by_shop_id.get(shop.id, [])
+        total = totals_by_shop_id.get(shop.id, 0) or 0
 
         res.append(
             {

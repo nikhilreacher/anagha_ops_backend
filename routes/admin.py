@@ -572,6 +572,7 @@ def dashboard(database=Depends(db)):
     )
     prev_moc_sales = previous_moc.total_sales if previous_moc else 0
     prev_moc_discount = previous_moc.total_discount if previous_moc else 0
+    prev_moc_closing_stock = previous_moc.closing_stock_value if previous_moc else 0
     prev_moc_margin = prev_moc_sales * 0.039
     prev_moc_profit = prev_moc_margin - previous_month_total - prev_moc_discount
     growth_percent = None
@@ -602,6 +603,7 @@ def dashboard(database=Depends(db)):
         "prev_moc_month": previous_month_start.strftime("%B %Y"),
         "prev_moc_sales": prev_moc_sales,
         "prev_moc_discount": prev_moc_discount,
+        "prev_moc_closing_stock": prev_moc_closing_stock,
         "prev_moc_margin": prev_moc_margin,
         "prev_moc_profit": prev_moc_profit,
         "prev_moc_growth_percent": growth_percent,

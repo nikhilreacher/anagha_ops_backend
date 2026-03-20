@@ -1,10 +1,11 @@
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from database import SessionLocal
 from models import Shop, ReturnTask, Dispatch, StockEntry, MOCEntry, Expense
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 router = APIRouter()
+IST = timezone(timedelta(hours=5, minutes=30))
 
 def db():
     d=SessionLocal()
@@ -23,6 +24,16 @@ def previous_month_bounds(reference_date: datetime):
     previous_month_last_day = current_month_start - timedelta(days=1)
     previous_month_start = previous_month_last_day.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return previous_month_start, current_month_start
+
+
+def current_moc_target_month(reference_date: datetime):
+    current_month_start, _ = month_bounds(reference_date)
+    previous_month_start, _ = previous_month_bounds(reference_date)
+    return current_month_start if reference_date.day >= 20 else previous_month_start
+
+
+def now_ist():
+    return datetime.now(IST).replace(tzinfo=None)
 
 
 def sum_expenses_in_range(database, start_date: datetime, end_date: datetime):
@@ -156,8 +167,8 @@ def add_stock_entry(stock_date: str, stock_count: float, database=Depends(db)):
 
 @router.get("/moc")
 def get_moc_status(database=Depends(db)):
-    now = datetime.utcnow()
-    target_month_start, _ = previous_month_bounds(now)
+    now = now_ist()
+    target_month_start = current_moc_target_month(now)
     existing = (
         database.query(MOCEntry)
         .filter(MOCEntry.moc_month == target_month_start)
@@ -173,6 +184,7 @@ def get_moc_status(database=Depends(db)):
                 "id": existing.id,
                 "total_sales": existing.total_sales,
                 "total_discount": existing.total_discount,
+                "closing_stock_value": existing.closing_stock_value or 0,
             }
             if existing
             else None
@@ -198,6 +210,7 @@ def get_moc_history(database=Depends(db)):
                 "target_month": month_start.strftime("%B %Y"),
                 "total_sales": row.total_sales,
                 "total_discount": row.total_discount,
+                "closing_stock_value": row.closing_stock_value or 0,
                 "total_expenses": total_expenses,
                 "margin": margin,
                 "profit": profit,
@@ -209,13 +222,19 @@ def get_moc_history(database=Depends(db)):
 
 
 @router.post("/moc")
-def save_moc(total_sales: float, total_discount: float = 0, moc_month: str = "", database=Depends(db)):
-    now = datetime.utcnow()
+def save_moc(
+    total_sales: float,
+    total_discount: float = 0,
+    closing_stock_value: float = 0,
+    moc_month: str = "",
+    database=Depends(db),
+):
+    now = now_ist()
     if moc_month:
         parsed = datetime.strptime(moc_month, "%Y-%m")
         target_month_start = parsed.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     else:
-        target_month_start, _ = previous_month_bounds(now)
+        target_month_start = current_moc_target_month(now)
 
     existing = (
         database.query(MOCEntry)
@@ -223,16 +242,13 @@ def save_moc(total_sales: float, total_discount: float = 0, moc_month: str = "",
         .first()
     )
     if existing:
-        existing.total_sales = total_sales
-        existing.total_discount = total_discount
-        existing.created_at = datetime.utcnow()
-        database.commit()
-        return {"status": "ok", "mode": "updated"}
+        raise HTTPException(status_code=400, detail="MOC entry already added for this period")
 
     row = MOCEntry(
         moc_month=target_month_start,
         total_sales=total_sales,
         total_discount=total_discount,
+        closing_stock_value=closing_stock_value,
         created_at=datetime.utcnow(),
     )
     database.add(row)

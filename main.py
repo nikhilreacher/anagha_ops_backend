@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from sqlalchemy import inspect, text
 import hashlib
 from database import Base, engine
+from models import SCHEMA_NAME
 from routes import shop, dispatch, payment, admin, route, auth
 
 Base.metadata.create_all(bind=engine)
@@ -10,14 +11,18 @@ Base.metadata.create_all(bind=engine)
 
 def run_shop_beat_migration():
     inspector = inspect(engine)
-    shop_columns = {column["name"] for column in inspector.get_columns("shops")}
+    shop_columns = {column["name"] for column in inspector.get_columns("shops", schema=SCHEMA_NAME)}
 
     with engine.begin() as connection:
         if "beat" not in shop_columns:
             connection.execute(text("ALTER TABLE shops ADD COLUMN beat VARCHAR"))
+        if "lat" not in shop_columns:
+            connection.execute(text("ALTER TABLE shops ADD COLUMN lat VARCHAR"))
+        if "lon" not in shop_columns:
+            connection.execute(text("ALTER TABLE shops ADD COLUMN lon VARCHAR"))
 
         # Backfill beat values from the old numeric route_id column if needed.
-        shop_columns = {column["name"] for column in inspect(engine).get_columns("shops")}
+        shop_columns = {column["name"] for column in inspect(engine).get_columns("shops", schema=SCHEMA_NAME)}
         if "route_id" in shop_columns:
             connection.execute(
                 text(
@@ -36,10 +41,11 @@ run_shop_beat_migration()
 
 def run_dispatch_migration():
     inspector = inspect(engine)
-    dispatch_columns = {column["name"] for column in inspector.get_columns("dispatches")}
-    ledger_columns = {column["name"] for column in inspector.get_columns("ledger")}
-    table_names = set(inspector.get_table_names())
-    return_columns = {column["name"] for column in inspector.get_columns("return_tasks")} if "return_tasks" in table_names else set()
+    dispatch_columns = {column["name"] for column in inspector.get_columns("dispatches", schema=SCHEMA_NAME)}
+    ledger_columns = {column["name"] for column in inspector.get_columns("ledger", schema=SCHEMA_NAME)}
+    table_names = set(inspector.get_table_names(schema=SCHEMA_NAME))
+    return_columns = {column["name"] for column in inspector.get_columns("return_tasks", schema=SCHEMA_NAME)} if "return_tasks" in table_names else set()
+    moc_columns = {column["name"] for column in inspector.get_columns("moc_entries", schema=SCHEMA_NAME)} if "moc_entries" in table_names else set()
 
     with engine.begin() as connection:
         if "status" not in dispatch_columns:
@@ -156,11 +162,15 @@ def run_dispatch_migration():
                         moc_month DATETIME NOT NULL,
                         total_sales FLOAT NOT NULL,
                         total_discount FLOAT NOT NULL,
+                        closing_stock_value FLOAT NOT NULL DEFAULT 0,
                         created_at DATETIME NOT NULL
                     )
                     """
                 )
             )
+        if "moc_entries" in table_names and "closing_stock_value" not in moc_columns:
+            connection.execute(text("ALTER TABLE moc_entries ADD COLUMN closing_stock_value FLOAT DEFAULT 0"))
+            connection.execute(text("UPDATE moc_entries SET closing_stock_value = 0 WHERE closing_stock_value IS NULL"))
         if "app_users" not in table_names:
             connection.execute(
                 text(
