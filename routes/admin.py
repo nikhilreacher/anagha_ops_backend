@@ -1,6 +1,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from database import SessionLocal
+from sqlalchemy import func
 from models import (
     Shop,
     Invoice,
@@ -43,63 +44,88 @@ def coerce_naive_utc(value: datetime | None) -> datetime | None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
-@router.get("/credit")
-def credit(database=Depends(db)):
-    shops = database.query(Shop).all()
-    res = []
-    for shop in shops:
-        ledger_rows = (
-            database.query(Ledger)
-            .filter(Ledger.shop_id == shop.id)
-            .filter(Ledger.balance.isnot(None))
-            .filter(Ledger.balance > 0)
-            .all()
-        )
 
-        if not ledger_rows:
+def serialize_credit_bill(row):
+    bill_date = coerce_naive_utc(row.bill_date)
+    delivery_date = coerce_naive_utc(row.delivery_date)
+    return {
+        "bill_no": row.bill_no,
+        "bill_date": bill_date.date().isoformat() if bill_date else None,
+        "delivery_date": delivery_date.date().isoformat() if delivery_date else None,
+        "balance": row.balance or 0,
+        "remarks": row.remarks,
+    }
+
+
+def get_credit_summary(database):
+    shops = database.query(Shop).all()
+    shop_map = {shop.id: shop for shop in shops}
+    ledger_rows = (
+        database.query(Ledger)
+        .filter(Ledger.shop_id.isnot(None))
+        .filter(Ledger.balance.isnot(None))
+        .filter(Ledger.balance > 0)
+        .order_by(Ledger.shop_id.asc(), Ledger.bill_date.asc(), Ledger.bill_no.asc())
+        .all()
+    )
+
+    grouped = {}
+    now = datetime.utcnow()
+    for row in ledger_rows:
+        shop = shop_map.get(row.shop_id)
+        if not shop:
             continue
 
-        total = 0
-        max_age = 0
-        bills = []
-
-        for row in ledger_rows:
-            balance = row.balance or 0
-            total += balance
-            bill_date = coerce_naive_utc(row.bill_date)
-            age = (datetime.utcnow() - bill_date).days if bill_date else 0
-            max_age = max(max_age, age)
-            bills.append(
-                {
-                    "bill_no": row.bill_no,
-                    "bill_date": bill_date.date().isoformat() if bill_date else None,
-                    "delivery_date": coerce_naive_utc(row.delivery_date).date().isoformat() if row.delivery_date else None,
-                    "balance": balance,
-                    "remarks": row.remarks,
-                }
-            )
-
-        bills.sort(
-            key=lambda item: (
-                item["bill_date"] is None,
-                item["bill_date"] or "",
-                item["bill_no"],
-            )
-        )
-
-        res.append(
+        entry = grouped.setdefault(
+            row.shop_id,
             {
                 "shop_id": shop.id,
                 "shop": shop.name,
                 "beat": shop.beat,
-                "outstanding": total,
-                "max_age": max_age,
-                "bills": bills,
-            }
+                "outstanding": 0,
+                "max_age": 0,
+                "bill_count": 0,
+            },
         )
 
+        balance = row.balance or 0
+        bill_date = coerce_naive_utc(row.bill_date)
+        age = (now - bill_date).days if bill_date else 0
+        entry["outstanding"] += balance
+        entry["max_age"] = max(entry["max_age"], age)
+        entry["bill_count"] += 1
+
+    res = list(grouped.values())
     res.sort(key=lambda x: (x["max_age"], x["outstanding"]), reverse=True)
     return res
+
+
+@router.get("/credit")
+def credit(database=Depends(db)):
+    return get_credit_summary(database)
+
+
+@router.get("/credit/{shop_id}/bills")
+def credit_shop_bills(shop_id: int, database=Depends(db)):
+    shop = database.query(Shop).filter(Shop.id == shop_id).first()
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+
+    ledger_rows = (
+        database.query(Ledger)
+        .filter(Ledger.shop_id == shop_id)
+        .filter(Ledger.balance.isnot(None))
+        .filter(Ledger.balance > 0)
+        .order_by(Ledger.bill_date.asc(), Ledger.bill_no.asc())
+        .all()
+    )
+
+    bills = [serialize_credit_bill(row) for row in ledger_rows]
+    return {
+        "shop_id": shop.id,
+        "shop": shop.name,
+        "bills": bills,
+    }
 
 
 def month_bounds(reference_date: datetime):
@@ -150,6 +176,45 @@ def sum_expenses_in_range(database, start_date: datetime, end_date: datetime):
     ]
 
     return total, breakdown, rows
+
+
+def build_employee_advance_maps(database, previous_month_start: datetime, previous_month_end: datetime):
+    outstanding_advances = {
+        row.employee_id: row.total or 0
+        for row in (
+            database.query(
+                EmployeeAdvance.employee_id.label("employee_id"),
+                func.sum(EmployeeAdvance.amount).label("total"),
+            )
+            .group_by(EmployeeAdvance.employee_id)
+            .all()
+        )
+    }
+    total_deductions = {
+        row.employee_id: row.total or 0
+        for row in (
+            database.query(
+                SalaryPayment.employee_id.label("employee_id"),
+                func.sum(SalaryPayment.advance_deduction).label("total"),
+            )
+            .group_by(SalaryPayment.employee_id)
+            .all()
+        )
+    }
+    previous_month_advances = {
+        row.employee_id: row.total or 0
+        for row in (
+            database.query(
+                EmployeeAdvance.employee_id.label("employee_id"),
+                func.sum(EmployeeAdvance.amount).label("total"),
+            )
+            .filter(EmployeeAdvance.advance_date >= previous_month_start)
+            .filter(EmployeeAdvance.advance_date < previous_month_end)
+            .group_by(EmployeeAdvance.employee_id)
+            .all()
+        )
+    }
+    return outstanding_advances, total_deductions, previous_month_advances
 
 
 def serialize_employee(employee, outstanding_advance=0):
@@ -419,21 +484,22 @@ def add_expense(
 
 @router.get("/dashboard")
 def dashboard(database=Depends(db)):
-    invoices = database.query(Invoice).all()
     invoice_outstanding = sum(
-        (invoice.amount or 0) - (invoice.paid_amount or 0) for invoice in invoices
+        (amount or 0) - (paid_amount or 0)
+        for amount, paid_amount in database.query(Invoice.amount, Invoice.paid_amount).all()
     )
 
     ledger_rows = (
-        database.query(Ledger)
-        .filter(Ledger.balance.isnot(None))
-        .filter(Ledger.balance > 0)
-        .all()
+        get_credit_summary(database)
     )
-    ledger_outstanding = sum((row.balance or 0) for row in ledger_rows)
+    ledger_outstanding = sum((row["outstanding"] or 0) for row in ledger_rows)
     total_outstanding = ledger_outstanding if ledger_rows else invoice_outstanding
 
-    stock_rows = database.query(StockEntry).order_by(StockEntry.stock_date.desc()).all()
+    stock_rows = (
+        database.query(StockEntry.stock_date, StockEntry.stock_count)
+        .order_by(StockEntry.stock_date.desc())
+        .all()
+    )
     unique_by_day = []
     seen_dates = set()
     for row in stock_rows:
@@ -442,6 +508,8 @@ def dashboard(database=Depends(db)):
             continue
         seen_dates.add(day_key)
         unique_by_day.append(row)
+        if len(unique_by_day) >= 7:
+            break
 
     last_7 = unique_by_day[:7]
     average_stock_7_days = (
@@ -470,16 +538,22 @@ def dashboard(database=Depends(db)):
         for row in current_month_rows[:8]
     ]
     employees = database.query(Employee).order_by(Employee.name.asc()).all()
+    outstanding_advances, total_deductions, previous_month_advances = build_employee_advance_maps(
+        database, previous_month_start, previous_month_end
+    )
     employee_rows = []
     for employee in employees:
-        row = serialize_employee(employee, get_employee_outstanding_advance(database, employee.id))
-        row["previous_month_advance"] = get_employee_advances_for_range(
-            database, employee.id, previous_month_start, previous_month_end
+        outstanding_advance = max(
+            (outstanding_advances.get(employee.id, 0) or 0) - (total_deductions.get(employee.id, 0) or 0),
+            0,
         )
+        row = serialize_employee(employee, outstanding_advance)
+        row["previous_month_advance"] = previous_month_advances.get(employee.id, 0) or 0
         employee_rows.append(row)
     recent_advances = (
         database.query(EmployeeAdvance)
         .order_by(EmployeeAdvance.advance_date.desc(), EmployeeAdvance.id.desc())
+        .limit(8)
         .all()
     )
     employee_name_map = {employee.id: employee.name for employee in employees}
@@ -551,6 +625,6 @@ def dashboard(database=Depends(db)):
                 "amount": row.amount,
                 "note": row.note,
             }
-            for row in recent_advances[:8]
+            for row in recent_advances
         ],
     }

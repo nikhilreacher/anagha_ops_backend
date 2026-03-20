@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from database import SessionLocal
 from models import Ledger, Shop
+from sms_service import send_payment_received_sms
 
 router = APIRouter()
 
@@ -102,13 +103,22 @@ def collect_payment(shop_id: int, amount: float, database=Depends(db)):
         )
 
     database.commit()
+    applied_amount = amount - remaining_amount
+    remaining_outstanding = sum((row.balance or 0) for row in ledger_rows if (row.balance or 0) > 0)
+    sms_result = send_payment_received_sms(
+        shop_name=shop.name,
+        phone=shop.phone,
+        applied_amount=applied_amount,
+        remaining_amount=remaining_outstanding,
+    )
 
     return {
         "status": "ok",
         "shop_id": shop.id,
         "shop": shop.name,
         "requested_amount": amount,
-        "applied_amount": amount - remaining_amount,
+        "applied_amount": applied_amount,
         "unapplied_amount": remaining_amount,
         "allocations": allocations,
+        "sms": sms_result,
     }

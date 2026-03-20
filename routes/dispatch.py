@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from database import SessionLocal
 from models import Shop, Dispatch, Route, Ledger, ReturnTask
+from sms_service import send_credit_added_sms
 
 router = APIRouter()
 
@@ -148,7 +149,18 @@ def add_dispatch_credit(
     dispatch.new_credit_total = (dispatch.new_credit_total or 0) + (balance or 0)
     database.commit()
 
-    return {"status": "ok", "new_credit_total": dispatch.new_credit_total}
+    sms_result = send_credit_added_sms(
+        shop_name=shop.name,
+        phone=shop.phone,
+        bill_no=bill_no,
+        balance=balance or 0,
+    )
+
+    return {
+        "status": "ok",
+        "new_credit_total": dispatch.new_credit_total,
+        "sms": sms_result,
+    }
 
 
 @router.post("/{dispatch_id}/close")

@@ -1,7 +1,7 @@
 
 from fastapi import APIRouter, Depends
 from database import SessionLocal
-from models import Shop, ReturnTask, Dispatch, StockEntry, MOCEntry
+from models import Shop, ReturnTask, Dispatch, StockEntry, MOCEntry, Expense
 from datetime import datetime, timedelta
 
 router = APIRouter()
@@ -23,6 +23,16 @@ def previous_month_bounds(reference_date: datetime):
     previous_month_last_day = current_month_start - timedelta(days=1)
     previous_month_start = previous_month_last_day.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return previous_month_start, current_month_start
+
+
+def sum_expenses_in_range(database, start_date: datetime, end_date: datetime):
+    rows = (
+        database.query(Expense)
+        .filter(Expense.expense_date >= start_date)
+        .filter(Expense.expense_date < end_date)
+        .all()
+    )
+    return sum((row.amount or 0) for row in rows)
 
 @router.get("/")
 def get_shops(database=Depends(db)):
@@ -155,7 +165,7 @@ def get_moc_status(database=Depends(db)):
         .first()
     )
     return {
-        "allowed": now.day == 21,
+        "allowed": 20 <= now.day <= 22,
         "target_month": target_month_start.strftime("%B %Y"),
         "moc_month": target_month_start.date().isoformat(),
         "entry": (
@@ -173,17 +183,29 @@ def get_moc_status(database=Depends(db)):
 @router.get("/moc/history")
 def get_moc_history(database=Depends(db)):
     rows = database.query(MOCEntry).order_by(MOCEntry.moc_month.desc(), MOCEntry.id.desc()).all()
-    return [
-        {
-            "id": row.id,
-            "moc_month": row.moc_month.date().isoformat(),
-            "target_month": row.moc_month.strftime("%B %Y"),
-            "total_sales": row.total_sales,
-            "total_discount": row.total_discount,
-            "created_at": row.created_at.isoformat(),
-        }
-        for row in rows
-    ]
+    history = []
+    for row in rows:
+        month_start = row.moc_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        _, month_end = month_bounds(month_start)
+        total_expenses = sum_expenses_in_range(database, month_start, month_end)
+        margin = (row.total_sales or 0) * 0.039
+        profit = margin - total_expenses - (row.total_discount or 0)
+
+        history.append(
+            {
+                "id": row.id,
+                "moc_month": month_start.date().isoformat(),
+                "target_month": month_start.strftime("%B %Y"),
+                "total_sales": row.total_sales,
+                "total_discount": row.total_discount,
+                "total_expenses": total_expenses,
+                "margin": margin,
+                "profit": profit,
+                "created_at": row.created_at.isoformat(),
+            }
+        )
+
+    return history
 
 
 @router.post("/moc")
