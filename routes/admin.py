@@ -17,6 +17,7 @@ from models import (
 from datetime import datetime, timedelta, timezone
 
 router = APIRouter()
+IST = timezone(timedelta(hours=5, minutes=30))
 
 EXPENSE_TYPES = [
     "Stationary",
@@ -139,6 +140,16 @@ def previous_month_bounds(reference_date: datetime):
     previous_month_last_day = current_month_start - timedelta(days=1)
     previous_month_start = previous_month_last_day.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return previous_month_start, current_month_start
+
+
+def current_moc_target_month(reference_date: datetime):
+    current_month_start, _ = month_bounds(reference_date)
+    previous_month_start, _ = previous_month_bounds(reference_date)
+    return current_month_start if reference_date.day >= 20 else previous_month_start
+
+
+def now_ist():
+    return datetime.now(IST).replace(tzinfo=None)
 
 
 def working_days_in_month(month_start: datetime, month_end: datetime):
@@ -520,6 +531,7 @@ def dashboard(database=Depends(db)):
     )
     current_month_start, next_month_start = month_bounds(datetime.utcnow())
     previous_month_start, previous_month_end = previous_month_bounds(datetime.utcnow())
+    current_moc_month_start = current_moc_target_month(now_ist())
 
     current_month_total, current_month_breakdown, current_month_rows = sum_expenses_in_range(
         database, current_month_start, next_month_start
@@ -559,11 +571,11 @@ def dashboard(database=Depends(db)):
     employee_name_map = {employee.id: employee.name for employee in employees}
     previous_moc = (
         database.query(MOCEntry)
-        .filter(MOCEntry.moc_month == previous_month_start)
+        .filter(MOCEntry.moc_month == current_moc_month_start)
         .order_by(MOCEntry.id.desc())
         .first()
     )
-    earlier_month_start, earlier_month_end = previous_month_bounds(previous_month_start)
+    earlier_month_start, earlier_month_end = previous_month_bounds(current_moc_month_start)
     previous_to_previous_moc = (
         database.query(MOCEntry)
         .filter(MOCEntry.moc_month == earlier_month_start)
@@ -600,7 +612,7 @@ def dashboard(database=Depends(db)):
         "active_dispatches": database.query(Dispatch).filter(Dispatch.status == "active").count(),
         "current_month_expenses": current_month_total,
         "previous_month_expenses": previous_month_total,
-        "prev_moc_month": previous_month_start.strftime("%B %Y"),
+        "prev_moc_month": current_moc_month_start.strftime("%B %Y"),
         "prev_moc_sales": prev_moc_sales,
         "prev_moc_discount": prev_moc_discount,
         "prev_moc_closing_stock": prev_moc_closing_stock,
