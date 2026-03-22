@@ -158,6 +158,7 @@ class MOCEntry(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     moc_month = Column(DateTime, nullable=False)
     total_sales = Column(Float, nullable=False)
+    total_icd_sales = Column(Float, nullable=False, default=0)
     total_discount = Column(Float, nullable=False)
     closing_stock_value = Column(Float, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

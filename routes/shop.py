@@ -183,6 +183,7 @@ def get_moc_status(database=Depends(db)):
             {
                 "id": existing.id,
                 "total_sales": existing.total_sales,
+                "total_icd_sales": existing.total_icd_sales or 0,
                 "total_discount": existing.total_discount,
                 "closing_stock_value": existing.closing_stock_value or 0,
             }
@@ -201,6 +202,7 @@ def get_moc_history(database=Depends(db)):
         _, month_end = month_bounds(month_start)
         total_expenses = sum_expenses_in_range(database, month_start, month_end)
         margin = (row.total_sales or 0) * 0.039
+        icd_profit = (row.total_icd_sales or 0) * 0.14
         profit = margin - total_expenses - (row.total_discount or 0)
 
         history.append(
@@ -209,10 +211,12 @@ def get_moc_history(database=Depends(db)):
                 "moc_month": month_start.date().isoformat(),
                 "target_month": month_start.strftime("%B %Y"),
                 "total_sales": row.total_sales,
+                "total_icd_sales": row.total_icd_sales or 0,
                 "total_discount": row.total_discount,
                 "closing_stock_value": row.closing_stock_value or 0,
                 "total_expenses": total_expenses,
                 "margin": margin,
+                "icd_profit": icd_profit,
                 "profit": profit,
                 "created_at": row.created_at.isoformat(),
             }
@@ -224,6 +228,7 @@ def get_moc_history(database=Depends(db)):
 @router.post("/moc")
 def save_moc(
     total_sales: float,
+    total_icd_sales: float = 0,
     total_discount: float = 0,
     closing_stock_value: float = 0,
     moc_month: str = "",
@@ -247,6 +252,7 @@ def save_moc(
     row = MOCEntry(
         moc_month=target_month_start,
         total_sales=total_sales,
+        total_icd_sales=total_icd_sales,
         total_discount=total_discount,
         closing_stock_value=closing_stock_value,
         created_at=datetime.utcnow(),

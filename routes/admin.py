@@ -189,7 +189,17 @@ def sum_expenses_in_range(database, start_date: datetime, end_date: datetime):
     return total, breakdown, rows
 
 
-def build_employee_advance_maps(database, previous_month_start: datetime, previous_month_end: datetime):
+def sum_employee_advances_in_range(database, start_date: datetime, end_date: datetime):
+    total = (
+        database.query(func.sum(EmployeeAdvance.amount))
+        .filter(EmployeeAdvance.advance_date >= start_date)
+        .filter(EmployeeAdvance.advance_date < end_date)
+        .scalar()
+    )
+    return total or 0
+
+
+def build_employee_advance_maps(database, salary_month_start: datetime, salary_month_end: datetime):
     outstanding_advances = {
         row.employee_id: row.total or 0
         for row in (
@@ -212,20 +222,20 @@ def build_employee_advance_maps(database, previous_month_start: datetime, previo
             .all()
         )
     }
-    previous_month_advances = {
+    salary_month_advances = {
         row.employee_id: row.total or 0
         for row in (
             database.query(
                 EmployeeAdvance.employee_id.label("employee_id"),
                 func.sum(EmployeeAdvance.amount).label("total"),
             )
-            .filter(EmployeeAdvance.advance_date >= previous_month_start)
-            .filter(EmployeeAdvance.advance_date < previous_month_end)
+            .filter(EmployeeAdvance.advance_date >= salary_month_start)
+            .filter(EmployeeAdvance.advance_date < salary_month_end)
             .group_by(EmployeeAdvance.employee_id)
             .all()
         )
     }
-    return outstanding_advances, total_deductions, previous_month_advances
+    return outstanding_advances, total_deductions, salary_month_advances
 
 
 def serialize_employee(employee, outstanding_advance=0):
@@ -236,7 +246,7 @@ def serialize_employee(employee, outstanding_advance=0):
         "phone": employee.phone,
         "salary": employee.salary,
         "outstanding_advance": outstanding_advance,
-        "previous_month_advance": 0,
+        "salary_month_advance": 0,
         "created_at": employee.created_at.isoformat(),
     }
 
@@ -393,24 +403,24 @@ def pay_salary(
         raise HTTPException(status_code=400, detail="Days cannot be negative")
 
     parsed_payment_date = datetime.strptime(payment_date, "%Y-%m-%d")
-    if not (1 <= parsed_payment_date.day <= 20):
-        raise HTTPException(status_code=400, detail="Salary payment is allowed only from 1st to 20th")
+    if not (1 <= parsed_payment_date.day <= 10):
+        raise HTTPException(status_code=400, detail="Salary payment is allowed only from 1st to 10th")
 
-    previous_month_start, current_month_start = previous_month_bounds(parsed_payment_date)
-    working_days = working_days_in_month(previous_month_start, current_month_start)
-    total_days = total_days_in_month(previous_month_start, current_month_start)
+    salary_month_start, salary_month_end = month_bounds(parsed_payment_date)
+    working_days = working_days_in_month(salary_month_start, salary_month_end)
+    total_days = total_days_in_month(salary_month_start, salary_month_end)
     if absent_days > working_days:
-        raise HTTPException(status_code=400, detail="Present and absent days exceed previous month's working days")
+        raise HTTPException(status_code=400, detail="Present and absent days exceed salary month's working days")
     present_days = working_days - absent_days
 
     payable_absent_days = max(absent_days - 1, 0)
     daily_salary = (employee.salary or 0) / total_days if employee.salary and total_days else 0
     absent_deduction = daily_salary * payable_absent_days
     available_after_absence = max((employee.salary or 0) - absent_deduction, 0)
-    previous_month_advances = get_employee_advances_for_range(
-        database, employee.id, previous_month_start, current_month_start
+    salary_month_advances = get_employee_advances_for_range(
+        database, employee.id, salary_month_start, salary_month_end
     )
-    advance_deduction = min(previous_month_advances, available_after_absence)
+    advance_deduction = min(salary_month_advances, available_after_absence)
     paid_amount = max(available_after_absence - advance_deduction, 0)
 
     salary_payment = SalaryPayment(
@@ -441,7 +451,7 @@ def pay_salary(
             "employee_id": employee.id,
             "employee_name": employee.name,
             "payment_date": parsed_payment_date.date().isoformat(),
-            "salary_month": previous_month_start.strftime("%B %Y"),
+            "salary_month": salary_month_start.strftime("%B %Y"),
             "total_days": total_days,
             "working_days": working_days,
             "present_days": present_days,
@@ -531,11 +541,26 @@ def dashboard(database=Depends(db)):
     )
     current_month_start, next_month_start = month_bounds(datetime.utcnow())
     previous_month_start, previous_month_end = previous_month_bounds(datetime.utcnow())
-    current_moc_month_start = current_moc_target_month(now_ist())
+    salary_reference_date = now_ist()
+    salary_month_start, salary_month_end = month_bounds(salary_reference_date)
+    current_moc_month_start = current_moc_target_month(salary_reference_date)
 
     current_month_total, current_month_breakdown, current_month_rows = sum_expenses_in_range(
         database, current_month_start, next_month_start
     )
+    current_month_advance_total = sum_employee_advances_in_range(
+        database, current_month_start, next_month_start
+    )
+    if current_month_advance_total:
+        current_month_total += current_month_advance_total
+        current_month_breakdown = sorted(
+            [
+                *current_month_breakdown,
+                {"type": "Salary Advance", "amount": current_month_advance_total},
+            ],
+            key=lambda item: item["amount"],
+            reverse=True,
+        )
     previous_month_total, _, _ = sum_expenses_in_range(
         database, previous_month_start, previous_month_end
     )
@@ -550,8 +575,8 @@ def dashboard(database=Depends(db)):
         for row in current_month_rows[:8]
     ]
     employees = database.query(Employee).order_by(Employee.name.asc()).all()
-    outstanding_advances, total_deductions, previous_month_advances = build_employee_advance_maps(
-        database, previous_month_start, previous_month_end
+    outstanding_advances, total_deductions, salary_month_advances = build_employee_advance_maps(
+        database, salary_month_start, salary_month_end
     )
     employee_rows = []
     for employee in employees:
@@ -560,7 +585,7 @@ def dashboard(database=Depends(db)):
             0,
         )
         row = serialize_employee(employee, outstanding_advance)
-        row["previous_month_advance"] = previous_month_advances.get(employee.id, 0) or 0
+        row["salary_month_advance"] = salary_month_advances.get(employee.id, 0) or 0
         employee_rows.append(row)
     recent_advances = (
         database.query(EmployeeAdvance)
@@ -575,6 +600,10 @@ def dashboard(database=Depends(db)):
         .order_by(MOCEntry.id.desc())
         .first()
     )
+    _, current_moc_month_end = month_bounds(current_moc_month_start)
+    current_moc_expense_total, _, _ = sum_expenses_in_range(
+        database, current_moc_month_start, current_moc_month_end
+    )
     earlier_month_start, earlier_month_end = previous_month_bounds(current_moc_month_start)
     previous_to_previous_moc = (
         database.query(MOCEntry)
@@ -583,10 +612,12 @@ def dashboard(database=Depends(db)):
         .first()
     )
     prev_moc_sales = previous_moc.total_sales if previous_moc else 0
+    prev_moc_icd_sales = previous_moc.total_icd_sales if previous_moc else 0
     prev_moc_discount = previous_moc.total_discount if previous_moc else 0
     prev_moc_closing_stock = previous_moc.closing_stock_value if previous_moc else 0
     prev_moc_margin = prev_moc_sales * 0.039
-    prev_moc_profit = prev_moc_margin - previous_month_total - prev_moc_discount
+    prev_moc_icd_profit = prev_moc_icd_sales * 0.14
+    prev_moc_profit = prev_moc_margin - current_moc_expense_total - prev_moc_discount
     growth_percent = None
     profit_growth_percent = None
     if previous_to_previous_moc and previous_to_previous_moc.total_sales:
@@ -614,9 +645,11 @@ def dashboard(database=Depends(db)):
         "previous_month_expenses": previous_month_total,
         "prev_moc_month": current_moc_month_start.strftime("%B %Y"),
         "prev_moc_sales": prev_moc_sales,
+        "prev_moc_icd_sales": prev_moc_icd_sales,
         "prev_moc_discount": prev_moc_discount,
         "prev_moc_closing_stock": prev_moc_closing_stock,
         "prev_moc_margin": prev_moc_margin,
+        "prev_moc_icd_profit": prev_moc_icd_profit,
         "prev_moc_profit": prev_moc_profit,
         "prev_moc_growth_percent": growth_percent,
         "prev_moc_profit_growth_percent": profit_growth_percent,
@@ -625,10 +658,10 @@ def dashboard(database=Depends(db)):
         "expense_types": EXPENSE_TYPES,
         "employee_roles": EMPLOYEE_ROLES,
         "employees": employee_rows,
-        "salary_window_open": 1 <= datetime.utcnow().day <= 20,
-        "salary_target_month": previous_month_start.strftime("%B %Y"),
-        "salary_total_days": total_days_in_month(previous_month_start, previous_month_end),
-        "salary_working_days": working_days_in_month(previous_month_start, previous_month_end),
+        "salary_window_open": 1 <= salary_reference_date.day <= 10,
+        "salary_target_month": salary_month_start.strftime("%B %Y"),
+        "salary_total_days": total_days_in_month(salary_month_start, salary_month_end),
+        "salary_working_days": working_days_in_month(salary_month_start, salary_month_end),
         "paid_leave_days": 1,
         "recent_advances": [
             {

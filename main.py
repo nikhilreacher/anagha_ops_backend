@@ -161,6 +161,7 @@ def run_dispatch_migration():
                         id INTEGER PRIMARY KEY,
                         moc_month DATETIME NOT NULL,
                         total_sales FLOAT NOT NULL,
+                        total_icd_sales FLOAT NOT NULL DEFAULT 0,
                         total_discount FLOAT NOT NULL,
                         closing_stock_value FLOAT NOT NULL DEFAULT 0,
                         created_at DATETIME NOT NULL
@@ -168,9 +169,19 @@ def run_dispatch_migration():
                     """
                 )
             )
+        if "moc_entries" in table_names:
+            moc_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("moc_entries", schema=SCHEMA_NAME)
+            }
         if "moc_entries" in table_names and "closing_stock_value" not in moc_columns:
-            connection.execute(text("ALTER TABLE moc_entries ADD COLUMN closing_stock_value FLOAT DEFAULT 0"))
-            connection.execute(text("UPDATE moc_entries SET closing_stock_value = 0 WHERE closing_stock_value IS NULL"))
+            connection.execute(text(f'ALTER TABLE "{SCHEMA_NAME}".moc_entries ADD COLUMN IF NOT EXISTS closing_stock_value FLOAT DEFAULT 0'))
+            connection.execute(text(f'UPDATE "{SCHEMA_NAME}".moc_entries SET closing_stock_value = 0 WHERE closing_stock_value IS NULL'))
+            moc_columns.add("closing_stock_value")
+        if "moc_entries" in table_names and "total_icd_sales" not in moc_columns:
+            connection.execute(text(f'ALTER TABLE "{SCHEMA_NAME}".moc_entries ADD COLUMN IF NOT EXISTS total_icd_sales FLOAT DEFAULT 0'))
+            connection.execute(text(f'UPDATE "{SCHEMA_NAME}".moc_entries SET total_icd_sales = 0 WHERE total_icd_sales IS NULL'))
+            moc_columns.add("total_icd_sales")
         if "app_users" not in table_names:
             connection.execute(
                 text(
