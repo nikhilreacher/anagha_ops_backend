@@ -46,29 +46,36 @@ def run_dispatch_migration():
     table_names = set(inspector.get_table_names(schema=SCHEMA_NAME))
     return_columns = {column["name"] for column in inspector.get_columns("return_tasks", schema=SCHEMA_NAME)} if "return_tasks" in table_names else set()
     moc_columns = {column["name"] for column in inspector.get_columns("moc_entries", schema=SCHEMA_NAME)} if "moc_entries" in table_names else set()
+    dispatch_table = f'"{SCHEMA_NAME}".dispatches'
+    ledger_table = f'"{SCHEMA_NAME}".ledger'
+    return_tasks_table = f'"{SCHEMA_NAME}".return_tasks'
+    app_users_table = f'"{SCHEMA_NAME}".app_users'
 
     with engine.begin() as connection:
         if "status" not in dispatch_columns:
-            connection.execute(text("ALTER TABLE dispatches ADD COLUMN status VARCHAR DEFAULT 'active'"))
+            connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'active'"))
         if "returns_checked" not in dispatch_columns:
-            connection.execute(text("ALTER TABLE dispatches ADD COLUMN returns_checked INTEGER DEFAULT 0"))
+            connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS returns_checked INTEGER DEFAULT 0"))
+        if "expiry_checked" not in dispatch_columns:
+            connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS expiry_checked INTEGER DEFAULT 0"))
         if "new_credits_checked" not in dispatch_columns:
-            connection.execute(text("ALTER TABLE dispatches ADD COLUMN new_credits_checked INTEGER DEFAULT 0"))
+            connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS new_credits_checked INTEGER DEFAULT 0"))
         if "new_credit_total" not in dispatch_columns:
-            connection.execute(text("ALTER TABLE dispatches ADD COLUMN new_credit_total FLOAT DEFAULT 0"))
+            connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS new_credit_total FLOAT DEFAULT 0"))
         if "close_notes" not in dispatch_columns:
-            connection.execute(text("ALTER TABLE dispatches ADD COLUMN close_notes VARCHAR"))
+            connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS close_notes VARCHAR"))
         if "closed_at" not in dispatch_columns:
-            connection.execute(text("ALTER TABLE dispatches ADD COLUMN closed_at DATETIME"))
+            connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS closed_at DATETIME"))
         if "dispatch_id" not in ledger_columns:
-            connection.execute(text("ALTER TABLE ledger ADD COLUMN dispatch_id INTEGER"))
+            connection.execute(text(f"ALTER TABLE {ledger_table} ADD COLUMN IF NOT EXISTS dispatch_id INTEGER"))
         if "return_tasks" not in table_names:
             connection.execute(
                 text(
                     """
-                    CREATE TABLE return_tasks (
+                    CREATE TABLE "ops-schema".return_tasks (
                         id INTEGER PRIMARY KEY,
                         dispatch_id INTEGER NOT NULL,
+                        task_type VARCHAR NOT NULL DEFAULT 'return',
                         beat VARCHAR NOT NULL,
                         created_at DATETIME NOT NULL,
                         status VARCHAR NOT NULL DEFAULT 'pending',
@@ -186,7 +193,7 @@ def run_dispatch_migration():
             connection.execute(
                 text(
                     """
-                    CREATE TABLE app_users (
+                    CREATE TABLE "ops-schema".app_users (
                         id INTEGER PRIMARY KEY,
                         username VARCHAR NOT NULL UNIQUE,
                         password_hash VARCHAR NOT NULL,
@@ -198,12 +205,15 @@ def run_dispatch_migration():
                 )
             )
         if "return_tasks" in table_names and "route_label" not in return_columns:
-            connection.execute(text("ALTER TABLE return_tasks ADD COLUMN route_label VARCHAR"))
+            connection.execute(text(f"ALTER TABLE {return_tasks_table} ADD COLUMN IF NOT EXISTS route_label VARCHAR"))
+        if "return_tasks" in table_names and "task_type" not in return_columns:
+            connection.execute(text(f"ALTER TABLE {return_tasks_table} ADD COLUMN IF NOT EXISTS task_type VARCHAR DEFAULT 'return'"))
+            connection.execute(text(f"UPDATE {return_tasks_table} SET task_type = 'return' WHERE task_type IS NULL OR task_type = ''"))
 
         connection.execute(
             text(
                 """
-                UPDATE dispatches
+                UPDATE "ops-schema".dispatches
                 SET status = 'active'
                 WHERE status IS NULL OR status = ''
                 """
@@ -212,7 +222,7 @@ def run_dispatch_migration():
         connection.execute(
             text(
                 """
-                UPDATE dispatches
+                UPDATE "ops-schema".dispatches
                 SET new_credit_total = 0
                 WHERE new_credit_total IS NULL
                 """
@@ -227,10 +237,10 @@ def run_dispatch_migration():
             connection.execute(
                 text(
                     """
-                    INSERT INTO app_users (username, password_hash, role, label, created_at)
+                    INSERT INTO "ops-schema".app_users (username, password_hash, role, label, created_at)
                     SELECT :username, :password_hash, :role, :label, CURRENT_TIMESTAMP
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM app_users WHERE username = :username
+                        SELECT 1 FROM "ops-schema".app_users WHERE username = :username
                     )
                     """
                 ),

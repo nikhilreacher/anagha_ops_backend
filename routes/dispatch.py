@@ -43,6 +43,7 @@ def serialize_dispatch(dispatch):
         "star_bags_boxes": dispatch.star_bags_boxes,
         "status": dispatch.status,
         "returns_checked": bool(dispatch.returns_checked),
+        "expiry_checked": bool(getattr(dispatch, "expiry_checked", 0)),
         "new_credits_checked": bool(dispatch.new_credits_checked),
         "new_credit_total": dispatch.new_credit_total or 0,
         "close_notes": dispatch.close_notes,
@@ -166,8 +167,9 @@ def add_dispatch_credit(
 @router.post("/{dispatch_id}/close")
 def close_dispatch(
     dispatch_id: int,
-    returns_checked: bool,
-    new_credits_checked: bool,
+    returns_checked: bool = False,
+    expiry_checked: bool = False,
+    new_credits_checked: bool = False,
     close_notes: str = "",
     database=Depends(db),
 ):
@@ -177,13 +179,18 @@ def close_dispatch(
 
     dispatch.status = "closed"
     dispatch.returns_checked = 1 if returns_checked else 0
+    dispatch.expiry_checked = 1 if expiry_checked else 0
     dispatch.new_credits_checked = 1 if new_credits_checked else 0
     dispatch.close_notes = close_notes or None
     dispatch.closed_at = datetime.utcnow()
-    if returns_checked:
+    for task_type, is_checked in (("return", returns_checked), ("expiry", expiry_checked)):
+        if not is_checked:
+            continue
+
         existing_task = (
             database.query(ReturnTask)
             .filter(ReturnTask.dispatch_id == dispatch.id)
+            .filter(ReturnTask.task_type == task_type)
             .filter(ReturnTask.status == "pending")
             .first()
         )
@@ -191,6 +198,7 @@ def close_dispatch(
             database.add(
                 ReturnTask(
                     dispatch_id=dispatch.id,
+                    task_type=task_type,
                     beat=dispatch.beat,
                     route_label=dispatch.beat,
                 )

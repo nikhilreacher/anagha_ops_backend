@@ -95,6 +95,7 @@ def get_returns(database=Depends(db)):
             {
                 "id": primary.id,
                 "dispatch_id": dispatch_id,
+                "task_type": getattr(primary, "task_type", "return"),
                 "beat": primary.beat,
                 "route_label": route_label,
                 "created_at": primary.created_at.isoformat(),

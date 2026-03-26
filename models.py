@@ -51,6 +51,7 @@ class Dispatch(Base):
     star_bags_boxes = Column(Integer, nullable=False)
     status = Column(String, default="active", nullable=False)
     returns_checked = Column(Integer, default=0, nullable=False)
+    expiry_checked = Column(Integer, default=0, nullable=False)
     new_credits_checked = Column(Integer, default=0, nullable=False)
     new_credit_total = Column(Float, default=0, nullable=False)
     close_notes = Column(String, nullable=True)
@@ -64,6 +65,7 @@ class ReturnTask(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     dispatch_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.dispatches.id"), nullable=False)
+    task_type = Column(String, default="return", nullable=False)
     beat = Column(String, nullable=True)
     route_label = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
