@@ -1,5 +1,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from database import SessionLocal
 from models import Shop, ReturnTask, Dispatch, StockEntry, MOCEntry, Expense
 from datetime import datetime, timedelta, timezone
@@ -129,7 +130,21 @@ def update_return(task_id: int, action: str, database=Depends(db)):
 
 @router.get("/stock")
 def get_stock_entries(database=Depends(db)):
-    rows = database.query(StockEntry).order_by(StockEntry.stock_date.desc()).all()
+    rows = (
+        database.query(StockEntry)
+        .order_by(StockEntry.stock_date.desc(), StockEntry.created_at.desc(), StockEntry.id.desc())
+        .all()
+    )
+
+    unique_rows = []
+    seen_dates = set()
+    for row in rows:
+      day_key = row.stock_date.date().isoformat()
+      if day_key in seen_dates:
+          continue
+      seen_dates.add(day_key)
+      unique_rows.append(row)
+
     return [
         {
             "id": row.id,
@@ -137,7 +152,7 @@ def get_stock_entries(database=Depends(db)):
             "stock_count": row.stock_count,
             "created_at": row.created_at.isoformat(),
         }
-        for row in rows
+        for row in unique_rows
     ]
 
 
@@ -147,7 +162,8 @@ def add_stock_entry(stock_date: str, stock_count: float, database=Depends(db)):
 
     existing = (
         database.query(StockEntry)
-        .filter(StockEntry.stock_date == parsed_stock_date)
+        .filter(func.date(StockEntry.stock_date) == parsed_stock_date.date().isoformat())
+        .order_by(StockEntry.created_at.desc(), StockEntry.id.desc())
         .first()
     )
     if existing:

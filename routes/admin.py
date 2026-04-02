@@ -152,6 +152,12 @@ def now_ist():
     return datetime.now(IST).replace(tzinfo=None)
 
 
+def salary_cycle_month(reference_date: datetime):
+    current_month_start, _ = month_bounds(reference_date)
+    previous_month_start, _ = previous_month_bounds(reference_date)
+    return previous_month_start if 1 <= reference_date.day <= 10 else current_month_start
+
+
 def working_days_in_month(month_start: datetime, month_end: datetime):
     current = month_start
     working_days = 0
@@ -247,6 +253,7 @@ def serialize_employee(employee, outstanding_advance=0):
         "salary": employee.salary,
         "outstanding_advance": outstanding_advance,
         "salary_month_advance": 0,
+        "salary_cycle_paid": False,
         "created_at": employee.created_at.isoformat(),
     }
 
@@ -281,10 +288,72 @@ def get_employee_advances_for_range(database, employee_id: int, start_date: date
     return sum((row.amount or 0) for row in rows)
 
 
+def employee_salary_paid_for_cycle(database, employee_id: int, salary_month_start: datetime):
+    payments = (
+        database.query(SalaryPayment)
+        .filter(SalaryPayment.employee_id == employee_id)
+        .all()
+    )
+    target_cycle_date = coerce_naive_utc(salary_month_start).date()
+    return any(coerce_naive_utc(salary_cycle_month(row.payment_date)).date() == target_cycle_date for row in payments)
+
+
+def serialize_employee_advance(row):
+    return {
+        "id": row.id,
+        "employee_id": row.employee_id,
+        "advance_date": row.advance_date.date().isoformat(),
+        "amount": row.amount,
+        "note": row.note,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
 @router.get("/employees")
 def list_employees(database=Depends(db)):
     employees = database.query(Employee).order_by(Employee.name.asc()).all()
     return [serialize_employee(employee, get_employee_outstanding_advance(database, employee.id)) for employee in employees]
+
+
+@router.get("/employees/{employee_id}")
+def employee_detail(employee_id: int, database=Depends(db)):
+    employee = get_employee_or_404(database, employee_id)
+    outstanding_advance = get_employee_outstanding_advance(database, employee.id)
+    now = now_ist()
+    salary_month_start = salary_cycle_month(now)
+    _, salary_month_end = month_bounds(salary_month_start)
+    salary_month_advances = get_employee_advances_for_range(
+        database, employee.id, salary_month_start, salary_month_end
+    )
+    advances = (
+        database.query(EmployeeAdvance)
+        .filter(EmployeeAdvance.employee_id == employee.id)
+        .order_by(EmployeeAdvance.advance_date.desc(), EmployeeAdvance.id.desc())
+        .all()
+    )
+    latest_salary_payment = (
+        database.query(SalaryPayment)
+        .filter(SalaryPayment.employee_id == employee.id)
+        .order_by(SalaryPayment.payment_date.desc(), SalaryPayment.id.desc())
+        .first()
+    )
+
+    return {
+        "employee": {
+            **serialize_employee(employee, outstanding_advance),
+            "salary_month_advance": salary_month_advances,
+            "salary_cycle_paid": employee_salary_paid_for_cycle(database, employee.id, salary_month_start),
+        },
+        "advances": [serialize_employee_advance(row) for row in advances],
+        "salary_summary": {
+            "salary_month": salary_month_start.strftime("%B %Y"),
+            "monthly_salary": employee.salary or 0,
+            "salary_month_advance": salary_month_advances,
+            "outstanding_advance": outstanding_advance,
+            "latest_salary_paid": latest_salary_payment.paid_amount if latest_salary_payment else 0,
+            "latest_salary_payment_date": latest_salary_payment.payment_date.date().isoformat() if latest_salary_payment else None,
+        },
+    }
 
 
 @router.post("/employees")
@@ -381,12 +450,44 @@ def add_employee_advance(
     return {
         "status": "ok",
         "advance": {
-            "id": row.id,
-            "employee_id": employee.id,
+            **serialize_employee_advance(row),
             "employee_name": employee.name,
-            "advance_date": row.advance_date.date().isoformat(),
-            "amount": row.amount,
-            "note": row.note,
+        },
+    }
+
+
+@router.post("/employees/{employee_id}/advances/{advance_id}")
+def update_employee_advance(
+    employee_id: int,
+    advance_id: int,
+    advance_date: str,
+    amount: float,
+    note: str = "",
+    database=Depends(db),
+):
+    employee = get_employee_or_404(database, employee_id)
+    row = (
+        database.query(EmployeeAdvance)
+        .filter(EmployeeAdvance.id == advance_id)
+        .filter(EmployeeAdvance.employee_id == employee.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Advance entry not found")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Advance amount must be greater than zero")
+
+    row.advance_date = datetime.strptime(advance_date, "%Y-%m-%d")
+    row.amount = amount
+    row.note = (note or "").strip() or None
+    database.commit()
+    database.refresh(row)
+
+    return {
+        "status": "ok",
+        "advance": {
+            **serialize_employee_advance(row),
+            "employee_name": employee.name,
         },
     }
 
@@ -406,7 +507,10 @@ def pay_salary(
     if not (1 <= parsed_payment_date.day <= 10):
         raise HTTPException(status_code=400, detail="Salary payment is allowed only from 1st to 10th")
 
-    salary_month_start, salary_month_end = month_bounds(parsed_payment_date)
+    salary_month_start = salary_cycle_month(parsed_payment_date)
+    _, salary_month_end = month_bounds(salary_month_start)
+    if employee_salary_paid_for_cycle(database, employee.id, salary_month_start):
+        raise HTTPException(status_code=400, detail=f"Salary already paid for {salary_month_start.strftime('%B %Y')}")
     working_days = working_days_in_month(salary_month_start, salary_month_end)
     total_days = total_days_in_month(salary_month_start, salary_month_end)
     if absent_days > working_days:
@@ -517,8 +621,8 @@ def dashboard(database=Depends(db)):
     total_outstanding = ledger_outstanding if ledger_rows else invoice_outstanding
 
     stock_rows = (
-        database.query(StockEntry.stock_date, StockEntry.stock_count)
-        .order_by(StockEntry.stock_date.desc())
+        database.query(StockEntry.stock_date, StockEntry.stock_count, StockEntry.created_at, StockEntry.id)
+        .order_by(StockEntry.stock_date.desc(), StockEntry.created_at.desc(), StockEntry.id.desc())
         .all()
     )
     unique_by_day = []
@@ -529,20 +633,29 @@ def dashboard(database=Depends(db)):
             continue
         seen_dates.add(day_key)
         unique_by_day.append(row)
-        if len(unique_by_day) >= 7:
+        if len(unique_by_day) >= 30:
             break
 
     last_7 = unique_by_day[:7]
     average_stock_7_days = (
         sum(row.stock_count for row in last_7) / len(last_7) if last_7 else 0
     )
-    previous_day_closing_stock = last_7[1].stock_count if len(last_7) > 1 else (
-        last_7[0].stock_count if last_7 else 0
-    )
+    stock_by_day = {row.stock_date.date().isoformat(): row.stock_count for row in unique_by_day}
+    yesterday_key = (now_ist() - timedelta(days=1)).date().isoformat()
+    previous_day_closing_stock = stock_by_day.get(yesterday_key, 0)
+    stock_history = [
+        {
+            "stock_date": row.stock_date.date().isoformat(),
+            "stock_count": row.stock_count,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in reversed(unique_by_day[:14])
+    ]
     current_month_start, next_month_start = month_bounds(datetime.utcnow())
     previous_month_start, previous_month_end = previous_month_bounds(datetime.utcnow())
     salary_reference_date = now_ist()
-    salary_month_start, salary_month_end = month_bounds(salary_reference_date)
+    salary_month_start = salary_cycle_month(salary_reference_date)
+    _, salary_month_end = month_bounds(salary_month_start)
     current_moc_month_start = current_moc_target_month(salary_reference_date)
 
     current_month_total, current_month_breakdown, current_month_rows = sum_expenses_in_range(
@@ -586,6 +699,7 @@ def dashboard(database=Depends(db)):
         )
         row = serialize_employee(employee, outstanding_advance)
         row["salary_month_advance"] = salary_month_advances.get(employee.id, 0) or 0
+        row["salary_cycle_paid"] = employee_salary_paid_for_cycle(database, employee.id, salary_month_start)
         employee_rows.append(row)
     recent_advances = (
         database.query(EmployeeAdvance)
@@ -640,6 +754,7 @@ def dashboard(database=Depends(db)):
         "total_outstanding": total_outstanding,
         "average_stock_7_days": average_stock_7_days,
         "previous_day_closing_stock": previous_day_closing_stock,
+        "stock_history": stock_history,
         "active_dispatches": database.query(Dispatch).filter(Dispatch.status == "active").count(),
         "current_month_expenses": current_month_total,
         "previous_month_expenses": previous_month_total,

@@ -101,9 +101,12 @@ def list_dispatches(database=Depends(db)):
 @router.post("/{dispatch_id}/ledger")
 def add_dispatch_credit(
     dispatch_id: int,
-    shop_id: int,
     bill_no: str,
     bill_date: str,
+    shop_id: int | None = None,
+    shop_name: str = "",
+    shop_phone: str = "",
+    shop_address: str = "",
     salesman: str = "",
     bill_amt: float = 0,
     paid_amt: float = 0,
@@ -116,14 +119,39 @@ def add_dispatch_credit(
     if dispatch.status != "active":
         raise HTTPException(status_code=400, detail="Dispatch is closed")
 
-    shop = database.query(Shop).filter(Shop.id == shop_id).first()
-    if not shop:
-        raise HTTPException(status_code=404, detail="Shop not found")
-
-    beat_value = resolve_beat_value(database, dispatch.beat)
     dispatch_beats = get_dispatch_beats(database, dispatch)
-    if shop.beat not in dispatch_beats:
-        raise HTTPException(status_code=400, detail="Shop does not belong to this dispatch route")
+
+    shop = None
+    if shop_id is not None:
+        shop = database.query(Shop).filter(Shop.id == shop_id).first()
+        if not shop:
+            raise HTTPException(status_code=404, detail="Shop not found")
+
+        if shop.beat not in dispatch_beats:
+            raise HTTPException(status_code=400, detail="Shop does not belong to this dispatch route")
+    else:
+        normalized_shop_name = shop_name.strip()
+        if not normalized_shop_name:
+            raise HTTPException(status_code=400, detail="Shop name is required")
+
+        matching_shop = (
+            database.query(Shop)
+            .filter(Shop.beat.in_(dispatch_beats))
+            .filter(Shop.name.ilike(normalized_shop_name))
+            .first()
+        )
+        if matching_shop:
+            shop = matching_shop
+        else:
+            shop = Shop(
+                name=normalized_shop_name,
+                phone=shop_phone.strip() or None,
+                address=shop_address.strip() or None,
+                beat=dispatch_beats[0] if dispatch_beats else dispatch.beat,
+                is_temporary=1,
+            )
+            database.add(shop)
+            database.flush()
 
     if database.query(Ledger).filter(Ledger.bill_no == bill_no).first():
         raise HTTPException(status_code=400, detail="Bill number already exists")
@@ -160,6 +188,12 @@ def add_dispatch_credit(
     return {
         "status": "ok",
         "new_credit_total": dispatch.new_credit_total,
+        "shop": {
+            "shop_id": shop.id,
+            "shop": shop.name,
+            "beat": shop.beat,
+            "is_temporary": bool(getattr(shop, "is_temporary", 0)),
+        },
         "sms": sms_result,
     }
 
@@ -256,6 +290,7 @@ def dispatch_shops(dispatch_id: int, database=Depends(db)):
                 "address": shop.address,
                 "lat": shop.lat,
                 "lon": shop.lon,
+                "is_temporary": bool(getattr(shop, "is_temporary", 0)),
                 "outstanding": total,
                 "bills": bills,
             }

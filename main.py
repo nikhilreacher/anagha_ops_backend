@@ -12,6 +12,7 @@ Base.metadata.create_all(bind=engine)
 def run_shop_beat_migration():
     inspector = inspect(engine)
     shop_columns = {column["name"] for column in inspector.get_columns("shops", schema=SCHEMA_NAME)}
+    shop_table = f'"{SCHEMA_NAME}".shops'
 
     with engine.begin() as connection:
         if "beat" not in shop_columns:
@@ -20,6 +21,10 @@ def run_shop_beat_migration():
             connection.execute(text("ALTER TABLE shops ADD COLUMN lat VARCHAR"))
         if "lon" not in shop_columns:
             connection.execute(text("ALTER TABLE shops ADD COLUMN lon VARCHAR"))
+        if "is_temporary" not in shop_columns:
+            connection.execute(text(f"ALTER TABLE {shop_table} ADD COLUMN IF NOT EXISTS is_temporary INTEGER DEFAULT 0"))
+
+        connection.execute(text(f"UPDATE {shop_table} SET is_temporary = 0 WHERE is_temporary IS NULL"))
 
         # Backfill beat values from the old numeric route_id column if needed.
         shop_columns = {column["name"] for column in inspect(engine).get_columns("shops", schema=SCHEMA_NAME)}

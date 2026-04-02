@@ -26,6 +26,7 @@ class Shop(Base):
     beat = Column(String)
     lat = Column(String, nullable=True)
     lon = Column(String, nullable=True)
+    is_temporary = Column(Integer, default=0, nullable=False)
 
 
 class Invoice(Base):
