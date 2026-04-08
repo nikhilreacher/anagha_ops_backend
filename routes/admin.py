@@ -538,8 +538,10 @@ def pay_salary(
     )
     database.add(salary_payment)
 
+    expense_booking_date = salary_month_end - timedelta(days=1)
+
     expense = Expense(
-        expense_date=parsed_payment_date,
+        expense_date=expense_booking_date,
         expense_type="Salary",
         note=employee.name,
         amount=paid_amount,
