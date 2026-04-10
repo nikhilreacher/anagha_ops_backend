@@ -234,9 +234,9 @@ def run_dispatch_migration():
             )
         )
         default_users = [
-            ("admin", hashlib.sha256("admin123".encode()).hexdigest(), "admin", "Admin"),
-            ("it", hashlib.sha256("it123".encode()).hexdigest(), "it", "IT Team"),
-            ("delivery", hashlib.sha256("delivery123".encode()).hexdigest(), "delivery", "Delivery Team"),
+            ("admin", hashlib.sha256("Anagha1923".encode()).hexdigest(), "admin", "Admin"),
+            ("it", hashlib.sha256("Anagha1923".encode()).hexdigest(), "it", "IT Team"),
+            ("delivery", hashlib.sha256("Anagha1923".encode()).hexdigest(), "delivery", "Delivery Team"),
         ]
         for username, password_hash, role_value, label in default_users:
             connection.execute(
