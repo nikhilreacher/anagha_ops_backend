@@ -243,10 +243,11 @@ def run_dispatch_migration():
                 text(
                     """
                     INSERT INTO "ops-schema".app_users (username, password_hash, role, label, created_at)
-                    SELECT :username, :password_hash, :role, :label, CURRENT_TIMESTAMP
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM "ops-schema".app_users WHERE username = :username
-                    )
+                    VALUES (:username, :password_hash, :role, :label, CURRENT_TIMESTAMP)
+                    ON CONFLICT (username) DO UPDATE
+                    SET password_hash = EXCLUDED.password_hash,
+                        role = EXCLUDED.role,
+                        label = EXCLUDED.label
                     """
                 ),
                 {
