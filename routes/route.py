@@ -4,14 +4,23 @@ from database import SessionLocal
 from models import Route, Shop
 
 router = APIRouter()
+VALID_BUSINESS_TYPES = {"mainline", "icd"}
 
 def db():
     d=SessionLocal()
     try: yield d
     finally: d.close()
 
+
+def normalize_business_type(value: str | None) -> str:
+    normalized = (value or "mainline").strip().lower()
+    if normalized not in VALID_BUSINESS_TYPES:
+        return "mainline"
+    return normalized
+
 @router.get("/")
-def get_routes(database=Depends(db)):
+def get_routes(business_type: str = "mainline", database=Depends(db)):
+    normalized_business_type = normalize_business_type(business_type)
     routes = database.query(Route).all()
     if routes:
         return [
@@ -28,6 +37,7 @@ def get_routes(database=Depends(db)):
         database.query(Shop.beat)
         .filter(Shop.beat.isnot(None))
         .filter(Shop.beat != "")
+        .filter(Shop.business_type == normalized_business_type)
         .distinct()
         .order_by(Shop.beat)
         .all()

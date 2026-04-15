@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from database import SessionLocal
-from models import Shop, ReturnTask, Dispatch, StockEntry, MOCEntry, Expense
+from models import Shop, ReturnTask, Dispatch, StockEntry, MOCEntry, Expense, Ledger
 from datetime import datetime, timedelta, timezone
 
 router = APIRouter()
@@ -12,6 +12,23 @@ def db():
     d=SessionLocal()
     try: yield d
     finally: d.close()
+
+
+def normalize_icd_bill_no(database, bill_no: str | None, shop_id: int):
+    value = (bill_no or "").strip()
+    if not value:
+        value = f"NA-ICD-IT-{shop_id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+    elif not value.upper().startswith("ICD-") and not value.upper().startswith("NA-ICD-"):
+        value = f"ICD-{value}"
+
+    candidate = value
+    suffix = 2
+    while True:
+        existing = database.query(Ledger).filter(Ledger.bill_no == candidate).first()
+        if not existing:
+            return candidate
+        candidate = f"{value}-{suffix}"
+        suffix += 1
 
 
 def month_bounds(reference_date: datetime):
@@ -45,6 +62,125 @@ def sum_expenses_in_range(database, start_date: datetime, end_date: datetime):
         .all()
     )
     return sum((row.amount or 0) for row in rows)
+
+
+@router.get("/icd-credit/shops")
+def get_icd_credit_shops(beat: str = "", search: str = "", database=Depends(db)):
+    query = database.query(Shop).filter(Shop.business_type == "icd")
+    if beat:
+        query = query.filter(Shop.beat == beat)
+    if search:
+        query = query.filter(Shop.name.ilike(f"%{search.strip()}%"))
+
+    shops = query.order_by(Shop.name.asc()).all()
+    return [
+        {
+            "shop_id": shop.id,
+            "shop": shop.name,
+            "beat": shop.beat,
+            "phone": shop.phone,
+            "address": shop.address,
+        }
+        for shop in shops
+    ]
+
+
+@router.post("/icd-credit")
+def add_icd_credit(
+    shop_id: int,
+    bill_amt: float,
+    paid_amt: float = 0,
+    bill_no: str = "",
+    bill_date: str = "",
+    delivery_date: str = "",
+    remarks: str = "",
+    created_by: str = "",
+    database=Depends(db),
+):
+    if bill_amt <= 0:
+        raise HTTPException(status_code=400, detail="Bill amount must be greater than zero")
+    if paid_amt < 0:
+        raise HTTPException(status_code=400, detail="Paid amount cannot be negative")
+    if paid_amt > bill_amt:
+        raise HTTPException(status_code=400, detail="Paid amount cannot exceed bill amount")
+
+    shop = (
+        database.query(Shop)
+        .filter(Shop.id == shop_id)
+        .filter(Shop.business_type == "icd")
+        .first()
+    )
+    if not shop:
+        raise HTTPException(status_code=404, detail="ICD shop not found")
+
+    final_bill_no = normalize_icd_bill_no(database, bill_no, shop.id)
+    parsed_bill_date = datetime.strptime(bill_date, "%Y-%m-%d") if bill_date else datetime.utcnow()
+    parsed_delivery_date = datetime.strptime(delivery_date, "%Y-%m-%d") if delivery_date else parsed_bill_date
+    final_remarks = remarks.strip() if remarks else ""
+    if created_by.strip():
+        final_remarks = f"{final_remarks} | Added by {created_by.strip()}".strip(" |")
+
+    row = Ledger(
+        bill_no=final_bill_no,
+        dispatch_id=None,
+        shop_id=shop.id,
+        party=shop.name,
+        bill_date=parsed_bill_date,
+        delivery_date=parsed_delivery_date,
+        beat_name=shop.beat,
+        salesman=None,
+        bill_amt=bill_amt,
+        paid_amt=paid_amt,
+        balance=bill_amt - paid_amt,
+        paid_date=parsed_delivery_date if paid_amt > 0 else None,
+        remarks=final_remarks or None,
+        business_type="icd",
+    )
+    database.add(row)
+    database.commit()
+    database.refresh(row)
+
+    return {
+        "status": "ok",
+        "ledger": {
+            "bill_no": row.bill_no,
+            "shop_id": row.shop_id,
+            "shop": shop.name,
+            "beat": shop.beat,
+            "bill_amt": row.bill_amt,
+            "paid_amt": row.paid_amt,
+            "balance": row.balance,
+        },
+    }
+
+
+@router.get("/icd-credit/recent")
+def get_recent_icd_credit_entries(limit: int = 10, database=Depends(db)):
+    safe_limit = min(max(limit, 1), 50)
+    rows = (
+        database.query(Ledger, Shop)
+        .outerjoin(Shop, Shop.id == Ledger.shop_id)
+        .filter(Ledger.business_type == "icd")
+        .order_by(Ledger.bill_date.desc(), Ledger.delivery_date.desc(), Ledger.bill_no.desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    return [
+        {
+            "bill_no": ledger.bill_no,
+            "shop_id": ledger.shop_id,
+            "shop": shop.name if shop else ledger.party,
+            "beat": ledger.beat_name or (shop.beat if shop else None),
+            "bill_date": ledger.bill_date.date().isoformat() if ledger.bill_date else None,
+            "delivery_date": ledger.delivery_date.date().isoformat() if ledger.delivery_date else None,
+            "bill_amt": ledger.bill_amt or 0,
+            "paid_amt": ledger.paid_amt or 0,
+            "balance": ledger.balance or 0,
+            "remarks": ledger.remarks,
+        }
+        for ledger, shop in rows
+    ]
 
 @router.get("/")
 def get_shops(database=Depends(db)):

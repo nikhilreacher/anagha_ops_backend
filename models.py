@@ -27,6 +27,8 @@ class Shop(Base):
     lat = Column(String, nullable=True)
     lon = Column(String, nullable=True)
     is_temporary = Column(Integer, default=0, nullable=False)
+    external_shop_code = Column(String, nullable=True)
+    business_type = Column(String, default="mainline", nullable=False)
 
 
 class Invoice(Base):
@@ -58,6 +60,7 @@ class Dispatch(Base):
     close_notes = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     closed_at = Column(DateTime, nullable=True)
+    business_type = Column(String, default="mainline", nullable=False)
 
 
 class ReturnTask(Base):
@@ -72,6 +75,7 @@ class ReturnTask(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status = Column(String, default="pending", nullable=False)
     resolved_at = Column(DateTime, nullable=True)
+    business_type = Column(String, default="mainline", nullable=False)
 
 
 class StockEntry(Base):
@@ -101,6 +105,7 @@ class Ledger(Base):
     balance = Column(Float, nullable=True)
     paid_date = Column(DateTime, nullable=True)
     remarks = Column(String, nullable=True)
+    business_type = Column(String, default="mainline", nullable=False)
 
 
 class Expense(Base):
@@ -154,6 +159,21 @@ class SalaryPayment(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class PaymentRequest(Base):
+    __tablename__ = "payment_requests"
+    __table_args__ = {"schema": SCHEMA_NAME}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    shop_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.shops.id"), nullable=False)
+    requested_by = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    status = Column(String, default="pending", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    received_at = Column(DateTime, nullable=True)
+    received_by = Column(String, nullable=True)
+    business_type = Column(String, default="mainline", nullable=False)
+
+
 class MOCEntry(Base):
     __tablename__ = "moc_entries"
     __table_args__ = {"schema": SCHEMA_NAME}
@@ -176,4 +196,5 @@ class AppUser(Base):
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False)
     label = Column(String, nullable=False)
+    business_type = Column(String, default="mainline", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

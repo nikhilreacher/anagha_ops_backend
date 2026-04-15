@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 router = APIRouter()
 IST = timezone(timedelta(hours=5, minutes=30))
+VALID_BUSINESS_TYPES = {"mainline", "icd"}
 
 EXPENSE_TYPES = [
     "Stationary",
@@ -46,6 +47,13 @@ def coerce_naive_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def normalize_business_type(value: str | None) -> str:
+    normalized = (value or "mainline").strip().lower()
+    if normalized not in VALID_BUSINESS_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid business type")
+    return normalized
+
+
 def serialize_credit_bill(row):
     bill_date = coerce_naive_utc(row.bill_date)
     delivery_date = coerce_naive_utc(row.delivery_date)
@@ -58,12 +66,14 @@ def serialize_credit_bill(row):
     }
 
 
-def get_credit_summary(database):
-    shops = database.query(Shop).all()
+def get_credit_summary(database, business_type: str = "mainline"):
+    normalized_business_type = normalize_business_type(business_type)
+    shops = database.query(Shop).filter(Shop.business_type == normalized_business_type).all()
     shop_map = {shop.id: shop for shop in shops}
     ledger_rows = (
         database.query(Ledger)
         .filter(Ledger.shop_id.isnot(None))
+        .filter(Ledger.business_type == normalized_business_type)
         .filter(Ledger.balance.isnot(None))
         .filter(Ledger.balance > 0)
         .order_by(Ledger.shop_id.asc(), Ledger.bill_date.asc(), Ledger.bill_no.asc())
@@ -102,19 +112,26 @@ def get_credit_summary(database):
 
 
 @router.get("/credit")
-def credit(database=Depends(db)):
-    return get_credit_summary(database)
+def credit(business_type: str = "mainline", database=Depends(db)):
+    return get_credit_summary(database, business_type)
 
 
 @router.get("/credit/{shop_id}/bills")
-def credit_shop_bills(shop_id: int, database=Depends(db)):
-    shop = database.query(Shop).filter(Shop.id == shop_id).first()
+def credit_shop_bills(shop_id: int, business_type: str = "mainline", database=Depends(db)):
+    normalized_business_type = normalize_business_type(business_type)
+    shop = (
+        database.query(Shop)
+        .filter(Shop.id == shop_id)
+        .filter(Shop.business_type == normalized_business_type)
+        .first()
+    )
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
 
     ledger_rows = (
         database.query(Ledger)
         .filter(Ledger.shop_id == shop_id)
+        .filter(Ledger.business_type == normalized_business_type)
         .filter(Ledger.balance.isnot(None))
         .filter(Ledger.balance > 0)
         .order_by(Ledger.bill_date.asc(), Ledger.bill_no.asc())
@@ -621,6 +638,8 @@ def dashboard(database=Depends(db)):
     )
     ledger_outstanding = sum((row["outstanding"] or 0) for row in ledger_rows)
     total_outstanding = ledger_outstanding if ledger_rows else invoice_outstanding
+    icd_credit_rows = get_credit_summary(database, "icd")
+    total_icd_outstanding = sum((row["outstanding"] or 0) for row in icd_credit_rows)
 
     stock_rows = (
         database.query(StockEntry.stock_date, StockEntry.stock_count, StockEntry.created_at, StockEntry.id)
@@ -754,6 +773,7 @@ def dashboard(database=Depends(db)):
 
     return {
         "total_outstanding": total_outstanding,
+        "total_icd_outstanding": total_icd_outstanding,
         "average_stock_7_days": average_stock_7_days,
         "previous_day_closing_stock": previous_day_closing_stock,
         "stock_history": stock_history,

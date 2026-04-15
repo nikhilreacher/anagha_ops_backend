@@ -56,6 +56,30 @@ uvicorn main:app --reload
 
 The API starts on `http://127.0.0.1:8000/` by default.
 
+## Importing Mainline or ICD data
+
+Use `import_shops.py` to load separate shop masters and ledger data for each business.
+
+Example ICD import:
+
+```bash
+python import_shops.py --file "C:\path\to\icd-data.xlsx" --business-type icd --mode both --shops-sheet Shops --ledger-sheet Sheet1 --create-missing-shops
+```
+
+Example mainline ledger-only import:
+
+```bash
+python import_shops.py --file "C:\path\to\mainline-ledger.xlsx" --business-type mainline --mode ledger --ledger-sheet Sheet1
+```
+
+Notes:
+
+- Supported `--business-type` values are `mainline` and `icd`.
+- `--mode shops` imports only shop master rows.
+- `--mode ledger` imports only ledger rows.
+- `--mode both` runs both imports in one pass.
+- When `--create-missing-shops` is provided, ledger rows can create shop master entries automatically for that business bucket.
+
 ## Available route groups
 
 - `/shops`

@@ -1,6 +1,7 @@
 
 from fastapi import FastAPI
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import DBAPIError
 import hashlib
 from database import Base, engine
 from models import SCHEMA_NAME
@@ -23,22 +24,30 @@ def run_shop_beat_migration():
             connection.execute(text("ALTER TABLE shops ADD COLUMN lon VARCHAR"))
         if "is_temporary" not in shop_columns:
             connection.execute(text(f"ALTER TABLE {shop_table} ADD COLUMN IF NOT EXISTS is_temporary INTEGER DEFAULT 0"))
+        if "external_shop_code" not in shop_columns:
+            connection.execute(text(f"ALTER TABLE {shop_table} ADD COLUMN IF NOT EXISTS external_shop_code VARCHAR"))
+        if "business_type" not in shop_columns:
+            connection.execute(text(f"ALTER TABLE {shop_table} ADD COLUMN IF NOT EXISTS business_type VARCHAR DEFAULT 'mainline'"))
 
         connection.execute(text(f"UPDATE {shop_table} SET is_temporary = 0 WHERE is_temporary IS NULL"))
+        connection.execute(text(f"UPDATE {shop_table} SET business_type = 'mainline' WHERE business_type IS NULL OR business_type = ''"))
 
-        # Backfill beat values from the old numeric route_id column if needed.
-        shop_columns = {column["name"] for column in inspect(engine).get_columns("shops", schema=SCHEMA_NAME)}
+        # Backfill beat values from the old numeric route_id column when that legacy column still exists.
         if "route_id" in shop_columns:
-            connection.execute(
-                text(
-                    """
-                    UPDATE shops
-                    SET beat = 'beat' || route_id
-                    WHERE route_id IS NOT NULL
-                      AND (beat IS NULL OR beat = '')
-                    """
+            try:
+                connection.execute(
+                    text(
+                        f"""
+                        UPDATE {shop_table}
+                        SET beat = 'beat' || route_id
+                        WHERE route_id IS NOT NULL
+                          AND (beat IS NULL OR beat = '')
+                        """
+                    )
                 )
-            )
+            except DBAPIError:
+                # If the legacy column is gone or inaccessible, skip the backfill and continue boot.
+                pass
 
 
 run_shop_beat_migration()
@@ -55,6 +64,7 @@ def run_dispatch_migration():
     ledger_table = f'"{SCHEMA_NAME}".ledger'
     return_tasks_table = f'"{SCHEMA_NAME}".return_tasks'
     app_users_table = f'"{SCHEMA_NAME}".app_users'
+    shops_table = f'"{SCHEMA_NAME}".shops'
 
     with engine.begin() as connection:
         if "status" not in dispatch_columns:
@@ -71,8 +81,12 @@ def run_dispatch_migration():
             connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS close_notes VARCHAR"))
         if "closed_at" not in dispatch_columns:
             connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS closed_at DATETIME"))
+        if "business_type" not in dispatch_columns:
+            connection.execute(text(f"ALTER TABLE {dispatch_table} ADD COLUMN IF NOT EXISTS business_type VARCHAR DEFAULT 'mainline'"))
         if "dispatch_id" not in ledger_columns:
             connection.execute(text(f"ALTER TABLE {ledger_table} ADD COLUMN IF NOT EXISTS dispatch_id INTEGER"))
+        if "business_type" not in ledger_columns:
+            connection.execute(text(f"ALTER TABLE {ledger_table} ADD COLUMN IF NOT EXISTS business_type VARCHAR DEFAULT 'mainline'"))
         if "return_tasks" not in table_names:
             connection.execute(
                 text(
@@ -84,7 +98,8 @@ def run_dispatch_migration():
                         beat VARCHAR NOT NULL,
                         created_at DATETIME NOT NULL,
                         status VARCHAR NOT NULL DEFAULT 'pending',
-                        resolved_at DATETIME
+                        resolved_at DATETIME,
+                        business_type VARCHAR NOT NULL DEFAULT 'mainline'
                     )
                     """
                 )
@@ -165,6 +180,24 @@ def run_dispatch_migration():
                     """
                 )
             )
+        if "payment_requests" not in table_names:
+            connection.execute(
+                text(
+                    f"""
+                    CREATE TABLE "{SCHEMA_NAME}".payment_requests (
+                        id INTEGER PRIMARY KEY,
+                        shop_id INTEGER NOT NULL,
+                        requested_by VARCHAR NOT NULL,
+                        amount FLOAT NOT NULL,
+                        status VARCHAR NOT NULL DEFAULT 'pending',
+                        created_at DATETIME NOT NULL,
+                        received_at DATETIME,
+                        received_by VARCHAR,
+                        business_type VARCHAR NOT NULL DEFAULT 'mainline'
+                    )
+                    """
+                )
+            )
         if "moc_entries" not in table_names:
             connection.execute(
                 text(
@@ -204,6 +237,7 @@ def run_dispatch_migration():
                         password_hash VARCHAR NOT NULL,
                         role VARCHAR NOT NULL,
                         label VARCHAR NOT NULL,
+                        business_type VARCHAR NOT NULL DEFAULT 'mainline',
                         created_at DATETIME NOT NULL
                     )
                     """
@@ -214,6 +248,15 @@ def run_dispatch_migration():
         if "return_tasks" in table_names and "task_type" not in return_columns:
             connection.execute(text(f"ALTER TABLE {return_tasks_table} ADD COLUMN IF NOT EXISTS task_type VARCHAR DEFAULT 'return'"))
             connection.execute(text(f"UPDATE {return_tasks_table} SET task_type = 'return' WHERE task_type IS NULL OR task_type = ''"))
+        if "return_tasks" in table_names and "business_type" not in return_columns:
+            connection.execute(text(f"ALTER TABLE {return_tasks_table} ADD COLUMN IF NOT EXISTS business_type VARCHAR DEFAULT 'mainline'"))
+
+        app_user_columns = {
+            column["name"]
+            for column in inspect(connection).get_columns("app_users", schema=SCHEMA_NAME)
+        } if "app_users" in table_names else set()
+        if "app_users" in table_names and "business_type" not in app_user_columns:
+            connection.execute(text(f"ALTER TABLE {app_users_table} ADD COLUMN IF NOT EXISTS business_type VARCHAR DEFAULT 'mainline'"))
 
         connection.execute(
             text(
@@ -233,30 +276,98 @@ def run_dispatch_migration():
                 """
             )
         )
+        connection.execute(
+            text(
+                f"""
+                UPDATE {dispatch_table}
+                SET business_type = 'mainline'
+                WHERE business_type IS NULL OR business_type = ''
+                """
+            )
+        )
+        connection.execute(
+            text(
+                f"""
+                UPDATE {ledger_table}
+                SET business_type = 'mainline'
+                WHERE business_type IS NULL OR business_type = ''
+                """
+            )
+        )
+        connection.execute(
+            text(
+                f"""
+                UPDATE {return_tasks_table}
+                SET business_type = 'mainline'
+                WHERE business_type IS NULL OR business_type = ''
+                """
+            )
+        )
+        connection.execute(
+            text(
+                f"""
+                UPDATE {app_users_table}
+                SET business_type = 'mainline'
+                WHERE business_type IS NULL OR business_type = ''
+                """
+            )
+        )
         default_users = [
-            ("admin", hashlib.sha256("Anagha1923".encode()).hexdigest(), "admin", "Admin"),
-            ("it", hashlib.sha256("Anagha1923".encode()).hexdigest(), "it", "IT Team"),
-            ("delivery", hashlib.sha256("Anagha1923".encode()).hexdigest(), "delivery", "Delivery Team"),
+            ("admin", hashlib.sha256("Anagha1923".encode()).hexdigest(), "admin", "Admin", "all"),
+            ("it", hashlib.sha256("Anagha1923".encode()).hexdigest(), "it", "IT Team", "all"),
+            ("delivery_mainline", hashlib.sha256("Anagha1923".encode()).hexdigest(), "delivery", "Delivery Team - Mainline", "mainline"),
+            ("delivery_icd", hashlib.sha256("Anagha1923".encode()).hexdigest(), "delivery", "Delivery Team - ICD", "icd"),
+            ("icd_salesman", hashlib.sha256("Anagha1923".encode()).hexdigest(), "salesman", "ICD Salesman", "icd"),
         ]
-        for username, password_hash, role_value, label in default_users:
-            connection.execute(
+        for username, password_hash, role_value, label, business_type in default_users:
+            existing_user = connection.execute(
                 text(
-                    """
-                    INSERT INTO "ops-schema".app_users (username, password_hash, role, label, created_at)
-                    VALUES (:username, :password_hash, :role, :label, CURRENT_TIMESTAMP)
-                    ON CONFLICT (username) DO UPDATE
-                    SET password_hash = EXCLUDED.password_hash,
-                        role = EXCLUDED.role,
-                        label = EXCLUDED.label
+                    f"""
+                    SELECT id
+                    FROM {app_users_table}
+                    WHERE username = :username
+                    LIMIT 1
                     """
                 ),
-                {
-                    "username": username,
-                    "password_hash": password_hash,
-                    "role": role_value,
-                    "label": label,
-                },
-            )
+                {"username": username},
+            ).first()
+
+            if existing_user:
+                connection.execute(
+                    text(
+                        f"""
+                        UPDATE {app_users_table}
+                        SET password_hash = :password_hash,
+                            role = :role,
+                            label = :label,
+                            business_type = :business_type
+                        WHERE username = :username
+                        """
+                    ),
+                    {
+                        "username": username,
+                        "password_hash": password_hash,
+                        "role": role_value,
+                        "label": label,
+                        "business_type": business_type,
+                    },
+                )
+            else:
+                connection.execute(
+                    text(
+                        f"""
+                        INSERT INTO {app_users_table} (username, password_hash, role, label, business_type, created_at)
+                        VALUES (:username, :password_hash, :role, :label, :business_type, CURRENT_TIMESTAMP)
+                        """
+                    ),
+                    {
+                        "username": username,
+                        "password_hash": password_hash,
+                        "role": role_value,
+                        "label": label,
+                        "business_type": business_type,
+                    },
+                )
 
 
 run_dispatch_migration()

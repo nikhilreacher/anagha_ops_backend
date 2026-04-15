@@ -7,6 +7,7 @@ from models import Shop, Dispatch, Route, Ledger, ReturnTask
 from sms_service import send_credit_added_sms
 
 router = APIRouter()
+VALID_BUSINESS_TYPES = {"mainline", "icd"}
 
 def db():
     d=SessionLocal()
@@ -19,6 +20,13 @@ def parse_datetime_as_naive_utc(value: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed
     return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def normalize_business_type(value: str | None) -> str:
+    normalized = (value or "mainline").strip().lower()
+    if normalized not in VALID_BUSINESS_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid business type")
+    return normalized
 
 
 def resolve_beat_value(database, beat: str):
@@ -64,15 +72,22 @@ def create_dispatch(
     total_bills: int,
     total_cases: int,
     star_bags_boxes: int,
+    business_type: str = "mainline",
     database=Depends(db),
 ):
+    normalized_business_type = normalize_business_type(business_type)
     beats = [item.strip() for item in beat.split(",") if item.strip()]
     if not beats:
         raise HTTPException(status_code=400, detail="At least one beat is required")
 
     resolved_beats = [resolve_beat_value(database, item) for item in beats]
     for beat_value in resolved_beats:
-        shops_exist = database.query(Shop).filter(Shop.beat == beat_value).first()
+        shops_exist = (
+            database.query(Shop)
+            .filter(Shop.beat == beat_value)
+            .filter(Shop.business_type == normalized_business_type)
+            .first()
+        )
         if not shops_exist:
             raise HTTPException(status_code=404, detail=f"Beat not found: {beat_value}")
 
@@ -81,6 +96,7 @@ def create_dispatch(
         total_bills=total_bills,
         total_cases=total_cases,
         star_bags_boxes=star_bags_boxes,
+        business_type=normalized_business_type,
     )
     database.add(dispatch)
     database.commit()
@@ -93,8 +109,14 @@ def create_dispatch(
 
 
 @router.get("/")
-def list_dispatches(database=Depends(db)):
-    dispatches = database.query(Dispatch).order_by(Dispatch.created_at.desc()).all()
+def list_dispatches(business_type: str = "mainline", database=Depends(db)):
+    normalized_business_type = normalize_business_type(business_type)
+    dispatches = (
+        database.query(Dispatch)
+        .filter(Dispatch.business_type == normalized_business_type)
+        .order_by(Dispatch.created_at.desc())
+        .all()
+    )
     return [serialize_dispatch(dispatch) for dispatch in dispatches]
 
 
@@ -113,17 +135,26 @@ def add_dispatch_credit(
     balance: float = 0,
     paid_date: str = "",
     remarks: str = "",
+    business_type: str = "mainline",
     database=Depends(db),
 ):
+    normalized_business_type = normalize_business_type(business_type)
     dispatch = get_dispatch_or_404(database, dispatch_id)
     if dispatch.status != "active":
         raise HTTPException(status_code=400, detail="Dispatch is closed")
+    if (dispatch.business_type or "mainline") != normalized_business_type:
+        raise HTTPException(status_code=400, detail="Dispatch does not belong to this business")
 
     dispatch_beats = get_dispatch_beats(database, dispatch)
 
     shop = None
     if shop_id is not None:
-        shop = database.query(Shop).filter(Shop.id == shop_id).first()
+        shop = (
+            database.query(Shop)
+            .filter(Shop.id == shop_id)
+            .filter(Shop.business_type == normalized_business_type)
+            .first()
+        )
         if not shop:
             raise HTTPException(status_code=404, detail="Shop not found")
 
@@ -137,6 +168,7 @@ def add_dispatch_credit(
         matching_shop = (
             database.query(Shop)
             .filter(Shop.beat.in_(dispatch_beats))
+            .filter(Shop.business_type == normalized_business_type)
             .filter(Shop.name.ilike(normalized_shop_name))
             .first()
         )
@@ -149,6 +181,7 @@ def add_dispatch_credit(
                 address=shop_address.strip() or None,
                 beat=dispatch_beats[0] if dispatch_beats else dispatch.beat,
                 is_temporary=1,
+                business_type=normalized_business_type,
             )
             database.add(shop)
             database.flush()
@@ -173,6 +206,7 @@ def add_dispatch_credit(
         balance=balance,
         paid_date=parsed_paid_date,
         remarks=remarks or None,
+        business_type=normalized_business_type,
     )
     database.add(ledger)
     dispatch.new_credit_total = (dispatch.new_credit_total or 0) + (balance or 0)
@@ -235,6 +269,7 @@ def close_dispatch(
                     task_type=task_type,
                     beat=dispatch.beat,
                     route_label=dispatch.beat,
+                    business_type=dispatch.business_type or "mainline",
                 )
             )
 
@@ -245,17 +280,26 @@ def close_dispatch(
 
 
 @router.get("/{dispatch_id}/shops")
-def dispatch_shops(dispatch_id: int, database=Depends(db)):
+def dispatch_shops(dispatch_id: int, business_type: str = "mainline", database=Depends(db)):
+    normalized_business_type = normalize_business_type(business_type)
     dispatch = get_dispatch_or_404(database, dispatch_id)
     if dispatch.status != "active":
         raise HTTPException(status_code=400, detail="Dispatch is closed")
+    if (dispatch.business_type or "mainline") != normalized_business_type:
+        raise HTTPException(status_code=400, detail="Dispatch does not belong to this business")
 
     dispatch_beats = get_dispatch_beats(database, dispatch)
-    shops = database.query(Shop).filter(Shop.beat.in_(dispatch_beats)).all()
+    shops = (
+        database.query(Shop)
+        .filter(Shop.beat.in_(dispatch_beats))
+        .filter(Shop.business_type == normalized_business_type)
+        .all()
+    )
     shop_ids = [shop.id for shop in shops]
     ledger_rows = (
         database.query(Ledger)
         .filter(Ledger.shop_id.in_(shop_ids) if shop_ids else False)
+        .filter(Ledger.business_type == normalized_business_type)
         .filter(Ledger.balance.isnot(None))
         .filter(Ledger.balance > 0)
         .order_by(Ledger.shop_id.asc(), Ledger.bill_date.asc(), Ledger.bill_no.asc())

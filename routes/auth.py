@@ -34,4 +34,5 @@ def login(username: str, password: str, database=Depends(db)):
         "username": user.username,
         "role": user.role,
         "label": user.label,
+        "business_type": user.business_type or "mainline",
     }
