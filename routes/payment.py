@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from database import SessionLocal
 from models import Ledger, PaymentFollowUp, PaymentRequest, Shop
-from sms_service import send_payment_received_sms
 
 router = APIRouter()
 VALID_BUSINESS_TYPES = {"mainline", "icd"}
@@ -436,13 +435,6 @@ def mark_payment_request_received(
     complete_active_followups(database, shop.id, normalized_business_type, received_by.strip())
     database.commit()
 
-    sms_result = send_payment_received_sms(
-        shop_name=shop.name,
-        phone=shop.phone,
-        applied_amount=payment_result["applied_amount"],
-        remaining_amount=payment_result["remaining_outstanding"],
-    )
-
     return {
         "status": "ok",
         "request": serialize_payment_request(row, shop),
@@ -450,7 +442,6 @@ def mark_payment_request_received(
         "applied_amount": payment_result["applied_amount"],
         "unapplied_amount": payment_result["unapplied_amount"],
         "allocations": payment_result["allocations"],
-        "sms": sms_result,
     }
 
 
@@ -472,12 +463,6 @@ def collect_payment(shop_id: int, amount: float, business_type: str = "mainline"
     payment_result = apply_payment_to_ledger(database, shop, amount, normalized_business_type)
     complete_active_followups(database, shop.id, normalized_business_type, "Admin")
     database.commit()
-    sms_result = send_payment_received_sms(
-        shop_name=shop.name,
-        phone=shop.phone,
-        applied_amount=payment_result["applied_amount"],
-        remaining_amount=payment_result["remaining_outstanding"],
-    )
 
     return {
         "status": "ok",
@@ -487,5 +472,4 @@ def collect_payment(shop_id: int, amount: float, business_type: str = "mainline"
         "applied_amount": payment_result["applied_amount"],
         "unapplied_amount": payment_result["unapplied_amount"],
         "allocations": payment_result["allocations"],
-        "sms": sms_result,
     }
