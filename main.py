@@ -60,11 +60,13 @@ def run_dispatch_migration():
     table_names = set(inspector.get_table_names(schema=SCHEMA_NAME))
     return_columns = {column["name"] for column in inspector.get_columns("return_tasks", schema=SCHEMA_NAME)} if "return_tasks" in table_names else set()
     moc_columns = {column["name"] for column in inspector.get_columns("moc_entries", schema=SCHEMA_NAME)} if "moc_entries" in table_names else set()
+    followup_columns = {column["name"] for column in inspector.get_columns("payment_followups", schema=SCHEMA_NAME)} if "payment_followups" in table_names else set()
     dispatch_table = f'"{SCHEMA_NAME}".dispatches'
     ledger_table = f'"{SCHEMA_NAME}".ledger'
     return_tasks_table = f'"{SCHEMA_NAME}".return_tasks'
     app_users_table = f'"{SCHEMA_NAME}".app_users'
     shops_table = f'"{SCHEMA_NAME}".shops'
+    payment_followups_table = f'"{SCHEMA_NAME}".payment_followups'
 
     with engine.begin() as connection:
         if "status" not in dispatch_columns:
@@ -198,6 +200,26 @@ def run_dispatch_migration():
                     """
                 )
             )
+        if "payment_followups" not in table_names:
+            connection.execute(
+                text(
+                    f"""
+                    CREATE TABLE "{SCHEMA_NAME}".payment_followups (
+                        id INTEGER PRIMARY KEY,
+                        shop_id INTEGER NOT NULL,
+                        followup_date DATETIME NOT NULL,
+                        note VARCHAR,
+                        status VARCHAR NOT NULL DEFAULT 'pending',
+                        created_by VARCHAR NOT NULL,
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME NOT NULL,
+                        completed_at DATETIME,
+                        completed_by VARCHAR,
+                        business_type VARCHAR NOT NULL DEFAULT 'mainline'
+                    )
+                    """
+                )
+            )
         if "moc_entries" not in table_names:
             connection.execute(
                 text(
@@ -257,6 +279,18 @@ def run_dispatch_migration():
         } if "app_users" in table_names else set()
         if "app_users" in table_names and "business_type" not in app_user_columns:
             connection.execute(text(f"ALTER TABLE {app_users_table} ADD COLUMN IF NOT EXISTS business_type VARCHAR DEFAULT 'mainline'"))
+        if "payment_followups" in table_names and "status" not in followup_columns:
+            connection.execute(text(f"ALTER TABLE {payment_followups_table} ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'pending'"))
+        if "payment_followups" in table_names and "note" not in followup_columns:
+            connection.execute(text(f"ALTER TABLE {payment_followups_table} ADD COLUMN IF NOT EXISTS note VARCHAR"))
+        if "payment_followups" in table_names and "updated_at" not in followup_columns:
+            connection.execute(text(f"ALTER TABLE {payment_followups_table} ADD COLUMN IF NOT EXISTS updated_at DATETIME"))
+        if "payment_followups" in table_names and "completed_at" not in followup_columns:
+            connection.execute(text(f"ALTER TABLE {payment_followups_table} ADD COLUMN IF NOT EXISTS completed_at DATETIME"))
+        if "payment_followups" in table_names and "completed_by" not in followup_columns:
+            connection.execute(text(f"ALTER TABLE {payment_followups_table} ADD COLUMN IF NOT EXISTS completed_by VARCHAR"))
+        if "payment_followups" in table_names and "business_type" not in followup_columns:
+            connection.execute(text(f"ALTER TABLE {payment_followups_table} ADD COLUMN IF NOT EXISTS business_type VARCHAR DEFAULT 'mainline'"))
 
         connection.execute(
             text(
@@ -307,6 +341,33 @@ def run_dispatch_migration():
             text(
                 f"""
                 UPDATE {app_users_table}
+                SET business_type = 'mainline'
+                WHERE business_type IS NULL OR business_type = ''
+                """
+            )
+        )
+        connection.execute(
+            text(
+                f"""
+                UPDATE {payment_followups_table}
+                SET status = 'pending'
+                WHERE status IS NULL OR status = ''
+                """
+            )
+        )
+        connection.execute(
+            text(
+                f"""
+                UPDATE {payment_followups_table}
+                SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)
+                WHERE updated_at IS NULL
+                """
+            )
+        )
+        connection.execute(
+            text(
+                f"""
+                UPDATE {payment_followups_table}
                 SET business_type = 'mainline'
                 WHERE business_type IS NULL OR business_type = ''
                 """

@@ -174,6 +174,23 @@ class PaymentRequest(Base):
     business_type = Column(String, default="mainline", nullable=False)
 
 
+class PaymentFollowUp(Base):
+    __tablename__ = "payment_followups"
+    __table_args__ = {"schema": SCHEMA_NAME}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    shop_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.shops.id"), nullable=False)
+    followup_date = Column(DateTime, nullable=False)
+    note = Column(String, nullable=True)
+    status = Column(String, default="pending", nullable=False)
+    created_by = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    completed_by = Column(String, nullable=True)
+    business_type = Column(String, default="mainline", nullable=False)
+
+
 class MOCEntry(Base):
     __tablename__ = "moc_entries"
     __table_args__ = {"schema": SCHEMA_NAME}
