@@ -1,4 +1,5 @@
 import argparse
+import math
 from datetime import datetime
 
 import pandas as pd
@@ -82,7 +83,8 @@ def to_float(value):
     if pd.isna(value) or value == "":
         return None
     try:
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
 

@@ -1,3 +1,5 @@
+import math
+
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +24,12 @@ def normalize_business_type(value: str | None) -> str:
     if normalized not in VALID_BUSINESS_TYPES:
         raise HTTPException(status_code=400, detail="Invalid business type")
     return normalized
+
+
+def require_finite_number(value: float, detail: str) -> float:
+    if not math.isfinite(value):
+        raise HTTPException(status_code=400, detail=detail)
+    return value
 
 
 def apply_payment_to_ledger(database, shop, amount: float, business_type: str):
@@ -370,6 +378,7 @@ def create_payment_request(
     database=Depends(db),
 ):
     normalized_business_type = normalize_business_type(business_type)
+    require_finite_number(amount, "Amount must be a valid number")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than zero")
     if not (requested_by or "").strip():
@@ -448,6 +457,7 @@ def mark_payment_request_received(
 @router.post("/")
 def collect_payment(shop_id: int, amount: float, business_type: str = "mainline", database=Depends(db)):
     normalized_business_type = normalize_business_type(business_type)
+    require_finite_number(amount, "Amount must be a valid number")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than zero")
 

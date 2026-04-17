@@ -3,7 +3,9 @@ from fastapi import FastAPI
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 import hashlib
-from database import Base, engine
+import math
+
+from database import Base, SessionLocal, engine
 from models import SCHEMA_NAME
 from routes import shop, dispatch, payment, admin, route, auth
 
@@ -432,6 +434,43 @@ def run_dispatch_migration():
 
 
 run_dispatch_migration()
+
+
+def run_numeric_sanitization():
+    float_columns = {
+        "invoices": ["amount", "paid_amount"],
+        "dispatches": ["new_credit_total"],
+        "stock_entries": ["stock_count"],
+        "ledger": ["bill_amt", "paid_amt", "balance"],
+        "expenses": ["amount"],
+        "employees": ["salary"],
+        "employee_advances": ["amount"],
+        "salary_payments": ["present_days", "absent_days", "absent_deduction", "advance_deduction", "paid_amount"],
+        "payment_requests": ["amount"],
+        "moc_entries": ["total_sales", "total_icd_sales", "total_discount", "closing_stock_value"],
+    }
+
+    with SessionLocal() as session:
+        updated = False
+        for model in Base.registry.mappers:
+            table_name = model.local_table.name
+            columns = float_columns.get(table_name)
+            if not columns:
+                continue
+
+            rows = session.query(model.class_).all()
+            for row in rows:
+                for column_name in columns:
+                    value = getattr(row, column_name, None)
+                    if isinstance(value, float) and not math.isfinite(value):
+                        setattr(row, column_name, 0)
+                        updated = True
+
+        if updated:
+            session.commit()
+
+
+run_numeric_sanitization()
 
 app = FastAPI()
 

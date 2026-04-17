@@ -1,4 +1,6 @@
 
+import math
+
 from fastapi import APIRouter, Depends, HTTPException
 from database import SessionLocal
 from sqlalchemy import func
@@ -326,6 +328,24 @@ def serialize_employee_advance(row):
     }
 
 
+def json_safe_value(value):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0
+    if isinstance(value, dict):
+        return {key: json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_safe_value(item) for item in value]
+    return value
+
+
+def require_finite_number(value: float, detail: str) -> float:
+    if not math.isfinite(value):
+        raise HTTPException(status_code=400, detail=detail)
+    return value
+
+
 @router.get("/employees")
 def list_employees(database=Depends(db)):
     employees = database.query(Employee).order_by(Employee.name.asc()).all()
@@ -384,6 +404,7 @@ def add_employee(
     role = (role or "").strip()
     if role not in EMPLOYEE_ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
+    require_finite_number(salary, "Salary must be a valid number")
     if salary <= 0:
         raise HTTPException(status_code=400, detail="Salary must be greater than zero")
 
@@ -415,6 +436,7 @@ def update_employee(
     role = (role or "").strip()
     if role not in EMPLOYEE_ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
+    require_finite_number(salary, "Salary must be a valid number")
     if salary <= 0:
         raise HTTPException(status_code=400, detail="Salary must be greater than zero")
     if not (name or "").strip():
@@ -451,6 +473,7 @@ def add_employee_advance(
     database=Depends(db),
 ):
     employee = get_employee_or_404(database, employee_id)
+    require_finite_number(amount, "Advance amount must be a valid number")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Advance amount must be greater than zero")
 
@@ -491,6 +514,7 @@ def update_employee_advance(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Advance entry not found")
+    require_finite_number(amount, "Advance amount must be a valid number")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Advance amount must be greater than zero")
 
@@ -517,6 +541,7 @@ def pay_salary(
     database=Depends(db),
 ):
     employee = get_employee_or_404(database, employee_id)
+    require_finite_number(absent_days, "Absent days must be a valid number")
     if absent_days < 0:
         raise HTTPException(status_code=400, detail="Days cannot be negative")
 
@@ -600,6 +625,7 @@ def add_expense(
     if expense_type not in EXPENSE_TYPES:
         raise HTTPException(status_code=400, detail="Invalid expense type")
 
+    require_finite_number(amount, "Amount must be a valid number")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than zero")
 
@@ -771,7 +797,7 @@ def dashboard(database=Depends(db)):
                 (prev_moc_profit - previous_to_previous_profit) / abs(previous_to_previous_profit)
             ) * 100
 
-    return {
+    return json_safe_value({
         "total_outstanding": total_outstanding,
         "total_icd_outstanding": total_icd_outstanding,
         "average_stock_7_days": average_stock_7_days,
@@ -811,4 +837,4 @@ def dashboard(database=Depends(db)):
             }
             for row in recent_advances
         ],
-    }
+    })

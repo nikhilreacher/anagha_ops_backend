@@ -1,4 +1,6 @@
 
+import math
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from database import SessionLocal
@@ -12,6 +14,12 @@ def db():
     d=SessionLocal()
     try: yield d
     finally: d.close()
+
+
+def require_finite_number(value: float, detail: str) -> float:
+    if not math.isfinite(value):
+        raise HTTPException(status_code=400, detail=detail)
+    return value
 
 
 def normalize_icd_bill_no(database, bill_no: str | None, shop_id: int):
@@ -97,6 +105,8 @@ def add_icd_credit(
     created_by: str = "",
     database=Depends(db),
 ):
+    require_finite_number(bill_amt, "Bill amount must be a valid number")
+    require_finite_number(paid_amt, "Paid amount must be a valid number")
     if bill_amt <= 0:
         raise HTTPException(status_code=400, detail="Bill amount must be greater than zero")
     if paid_amt < 0:
@@ -294,6 +304,7 @@ def get_stock_entries(database=Depends(db)):
 
 @router.post("/stock")
 def add_stock_entry(stock_date: str, stock_count: float, database=Depends(db)):
+    require_finite_number(stock_count, "Stock count must be a valid number")
     parsed_stock_date = datetime.fromisoformat(stock_date)
 
     existing = (
@@ -387,6 +398,10 @@ def save_moc(
     moc_month: str = "",
     database=Depends(db),
 ):
+    require_finite_number(total_sales, "Total sales must be a valid number")
+    require_finite_number(total_icd_sales, "Total ICD sales must be a valid number")
+    require_finite_number(total_discount, "Total discount must be a valid number")
+    require_finite_number(closing_stock_value, "Closing stock value must be a valid number")
     now = now_ist()
     if moc_month:
         parsed = datetime.strptime(moc_month, "%Y-%m")

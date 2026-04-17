@@ -1,4 +1,6 @@
 
+import math
+
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,6 +28,12 @@ def normalize_business_type(value: str | None) -> str:
     if normalized not in VALID_BUSINESS_TYPES:
         raise HTTPException(status_code=400, detail="Invalid business type")
     return normalized
+
+
+def require_finite_number(value: float, detail: str) -> float:
+    if not math.isfinite(value):
+        raise HTTPException(status_code=400, detail=detail)
+    return value
 
 
 def resolve_beat_value(database, beat: str):
@@ -188,6 +196,9 @@ def add_dispatch_credit(
     if database.query(Ledger).filter(Ledger.bill_no == bill_no).first():
         raise HTTPException(status_code=400, detail="Bill number already exists")
 
+    require_finite_number(bill_amt, "Bill amount must be a valid number")
+    require_finite_number(paid_amt, "Paid amount must be a valid number")
+    require_finite_number(balance, "Balance must be a valid number")
     parsed_bill_date = parse_datetime_as_naive_utc(bill_date)
     parsed_paid_date = parse_datetime_as_naive_utc(paid_date) if paid_date else None
 
