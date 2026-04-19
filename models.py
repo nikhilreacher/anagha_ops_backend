@@ -171,6 +171,8 @@ class PaymentRequest(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     received_at = Column(DateTime, nullable=True)
     received_by = Column(String, nullable=True)
+    bill_no = Column(String, nullable=True)
+    allocation_mode = Column(String, default="oldest", nullable=False)
     business_type = Column(String, default="mainline", nullable=False)
 
 

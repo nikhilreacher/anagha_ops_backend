@@ -63,6 +63,7 @@ def run_dispatch_migration():
     return_columns = {column["name"] for column in inspector.get_columns("return_tasks", schema=SCHEMA_NAME)} if "return_tasks" in table_names else set()
     moc_columns = {column["name"] for column in inspector.get_columns("moc_entries", schema=SCHEMA_NAME)} if "moc_entries" in table_names else set()
     followup_columns = {column["name"] for column in inspector.get_columns("payment_followups", schema=SCHEMA_NAME)} if "payment_followups" in table_names else set()
+    payment_request_columns = {column["name"] for column in inspector.get_columns("payment_requests", schema=SCHEMA_NAME)} if "payment_requests" in table_names else set()
     dispatch_table = f'"{SCHEMA_NAME}".dispatches'
     ledger_table = f'"{SCHEMA_NAME}".ledger'
     return_tasks_table = f'"{SCHEMA_NAME}".return_tasks'
@@ -222,6 +223,10 @@ def run_dispatch_migration():
                     """
                 )
             )
+        if "payment_requests" in table_names and "bill_no" not in payment_request_columns:
+            connection.execute(text(f'ALTER TABLE "{SCHEMA_NAME}".payment_requests ADD COLUMN IF NOT EXISTS bill_no VARCHAR'))
+        if "payment_requests" in table_names and "allocation_mode" not in payment_request_columns:
+            connection.execute(text(f'ALTER TABLE "{SCHEMA_NAME}".payment_requests ADD COLUMN IF NOT EXISTS allocation_mode VARCHAR DEFAULT \'oldest\''))
         if "moc_entries" not in table_names:
             connection.execute(
                 text(
@@ -345,6 +350,15 @@ def run_dispatch_migration():
                 UPDATE {app_users_table}
                 SET business_type = 'mainline'
                 WHERE business_type IS NULL OR business_type = ''
+                """
+            )
+        )
+        connection.execute(
+            text(
+                f"""
+                UPDATE "{SCHEMA_NAME}".payment_requests
+                SET allocation_mode = 'oldest'
+                WHERE allocation_mode IS NULL OR allocation_mode = ''
                 """
             )
         )

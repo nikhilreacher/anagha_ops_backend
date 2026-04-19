@@ -9,6 +9,7 @@ from models import Ledger, PaymentFollowUp, PaymentRequest, Shop
 
 router = APIRouter()
 VALID_BUSINESS_TYPES = {"mainline", "icd"}
+VALID_ALLOCATION_MODES = {"oldest", "latest_bill", "selected_bill"}
 
 
 def db():
@@ -32,26 +33,38 @@ def require_finite_number(value: float, detail: str) -> float:
     return value
 
 
-def apply_payment_to_ledger(database, shop, amount: float, business_type: str):
+def normalize_allocation_mode(value: str | None) -> str:
+    normalized = (value or "oldest").strip().lower()
+    if normalized not in VALID_ALLOCATION_MODES:
+        raise HTTPException(status_code=400, detail="Invalid allocation mode")
+    return normalized
+
+
+def get_pending_ledger_rows(database, shop_id: int, business_type: str):
     ledger_rows = (
         database.query(Ledger)
-        .filter(Ledger.shop_id == shop.id)
+        .filter(Ledger.shop_id == shop_id)
         .filter(Ledger.business_type == business_type)
         .filter(Ledger.balance.isnot(None))
         .filter(Ledger.balance > 0)
         .all()
     )
+    return ledger_rows
+
+
+def sort_ledger_rows(ledger_rows, latest_first: bool = False):
     ledger_rows.sort(
         key=lambda row: (
             row.bill_date is None,
             row.bill_date or datetime.max,
             row.bill_no or "",
-        )
+        ),
+        reverse=latest_first,
     )
+    return ledger_rows
 
-    if not ledger_rows:
-        raise HTTPException(status_code=400, detail="No pending credit found for this shop")
 
+def build_payment_allocations(ledger_rows, amount: float):
     remaining_amount = amount
     allocations = []
     payment_time = datetime.utcnow()
@@ -77,6 +90,30 @@ def apply_payment_to_ledger(database, shop, amount: float, business_type: str):
             }
         )
 
+    return payment_time, allocations, remaining_amount
+
+
+def apply_payment_to_ledger(database, shop, amount: float, business_type: str, allocation_mode: str = "oldest", bill_no: str | None = None):
+    ledger_rows = get_pending_ledger_rows(database, shop.id, business_type)
+
+    if not ledger_rows:
+        raise HTTPException(status_code=400, detail="No pending credit found for this shop")
+
+    normalized_mode = normalize_allocation_mode(allocation_mode)
+    candidate_rows = ledger_rows
+    if normalized_mode == "selected_bill":
+        target_bill_no = (bill_no or "").strip()
+        if not target_bill_no:
+            raise HTTPException(status_code=400, detail="Bill selection is required")
+        candidate_rows = [row for row in ledger_rows if (row.bill_no or "") == target_bill_no]
+        if not candidate_rows:
+            raise HTTPException(status_code=400, detail="Selected bill not found or already settled")
+    elif normalized_mode == "latest_bill":
+        candidate_rows = sort_ledger_rows(ledger_rows, latest_first=True)[:1]
+    else:
+        candidate_rows = sort_ledger_rows(ledger_rows)
+
+    payment_time, allocations, remaining_amount = build_payment_allocations(candidate_rows, amount)
     applied_amount = amount - remaining_amount
     remaining_outstanding = sum((row.balance or 0) for row in ledger_rows if (row.balance or 0) > 0)
     return {
@@ -100,6 +137,8 @@ def serialize_payment_request(row, shop):
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "received_at": row.received_at.isoformat() if row.received_at else None,
         "received_by": row.received_by,
+        "bill_no": row.bill_no,
+        "allocation_mode": row.allocation_mode or "oldest",
         "business_type": row.business_type,
     }
 
@@ -374,6 +413,8 @@ def create_payment_request(
     shop_id: int,
     amount: float,
     requested_by: str,
+    bill_no: str = "",
+    allocation_mode: str = "oldest",
     business_type: str = "mainline",
     database=Depends(db),
 ):
@@ -383,6 +424,10 @@ def create_payment_request(
         raise HTTPException(status_code=400, detail="Amount must be greater than zero")
     if not (requested_by or "").strip():
         raise HTTPException(status_code=400, detail="Requester is required")
+    normalized_allocation_mode = normalize_allocation_mode(allocation_mode)
+    normalized_bill_no = (bill_no or "").strip()
+    if normalized_allocation_mode == "selected_bill" and not normalized_bill_no:
+        raise HTTPException(status_code=400, detail="Please select a bill")
 
     shop = (
         database.query(Shop)
@@ -397,6 +442,8 @@ def create_payment_request(
         shop_id=shop.id,
         amount=amount,
         requested_by=requested_by.strip(),
+        bill_no=normalized_bill_no or None,
+        allocation_mode=normalized_allocation_mode,
         business_type=normalized_business_type,
     )
     database.add(row)
@@ -437,7 +484,14 @@ def mark_payment_request_received(
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
 
-    payment_result = apply_payment_to_ledger(database, shop, row.amount, normalized_business_type)
+    payment_result = apply_payment_to_ledger(
+        database,
+        shop,
+        row.amount,
+        normalized_business_type,
+        allocation_mode=row.allocation_mode or "oldest",
+        bill_no=row.bill_no,
+    )
     row.status = "received"
     row.received_at = payment_result["payment_time"]
     row.received_by = received_by.strip()
@@ -455,11 +509,22 @@ def mark_payment_request_received(
 
 
 @router.post("/")
-def collect_payment(shop_id: int, amount: float, business_type: str = "mainline", database=Depends(db)):
+def collect_payment(
+    shop_id: int,
+    amount: float,
+    bill_no: str = "",
+    allocation_mode: str = "oldest",
+    business_type: str = "mainline",
+    database=Depends(db),
+):
     normalized_business_type = normalize_business_type(business_type)
     require_finite_number(amount, "Amount must be a valid number")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than zero")
+    normalized_allocation_mode = normalize_allocation_mode(allocation_mode)
+    normalized_bill_no = (bill_no or "").strip()
+    if normalized_allocation_mode == "selected_bill" and not normalized_bill_no:
+        raise HTTPException(status_code=400, detail="Please select a bill")
 
     shop = (
         database.query(Shop)
@@ -470,7 +535,14 @@ def collect_payment(shop_id: int, amount: float, business_type: str = "mainline"
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
 
-    payment_result = apply_payment_to_ledger(database, shop, amount, normalized_business_type)
+    payment_result = apply_payment_to_ledger(
+        database,
+        shop,
+        amount,
+        normalized_business_type,
+        allocation_mode=normalized_allocation_mode,
+        bill_no=normalized_bill_no,
+    )
     complete_active_followups(database, shop.id, normalized_business_type, "Admin")
     database.commit()
 
