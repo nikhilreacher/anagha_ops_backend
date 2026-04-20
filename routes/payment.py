@@ -92,7 +92,6 @@ def build_payment_allocations(ledger_rows, amount: float):
 
     return payment_time, allocations, remaining_amount
 
-
 def apply_payment_to_ledger(database, shop, amount: float, business_type: str, allocation_mode: str = "oldest", bill_no: str | None = None):
     ledger_rows = get_pending_ledger_rows(database, shop.id, business_type)
 
@@ -165,6 +164,27 @@ def serialize_payment_history_event(paid_at, rows):
             for row in sorted_rows
         ],
     }
+
+
+def record_payment_for_shop(
+    database,
+    shop,
+    amount: float,
+    business_type: str,
+    allocation_mode: str = "oldest",
+    bill_no: str | None = None,
+    completed_by: str = "Admin",
+):
+    payment_result = apply_payment_to_ledger(
+        database,
+        shop,
+        amount,
+        business_type,
+        allocation_mode=allocation_mode,
+        bill_no=bill_no,
+    )
+    complete_active_followups(database, shop.id, business_type, completed_by)
+    return payment_result
 
 
 def parse_followup_date(value: str | None) -> datetime:
@@ -484,18 +504,18 @@ def mark_payment_request_received(
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
 
-    payment_result = apply_payment_to_ledger(
+    payment_result = record_payment_for_shop(
         database,
         shop,
         row.amount,
         normalized_business_type,
         allocation_mode=row.allocation_mode or "oldest",
         bill_no=row.bill_no,
+        completed_by=received_by.strip(),
     )
     row.status = "received"
     row.received_at = payment_result["payment_time"]
     row.received_by = received_by.strip()
-    complete_active_followups(database, shop.id, normalized_business_type, received_by.strip())
     database.commit()
 
     return {
@@ -535,15 +555,15 @@ def collect_payment(
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
 
-    payment_result = apply_payment_to_ledger(
+    payment_result = record_payment_for_shop(
         database,
         shop,
         amount,
         normalized_business_type,
         allocation_mode=normalized_allocation_mode,
         bill_no=normalized_bill_no,
+        completed_by="Admin",
     )
-    complete_active_followups(database, shop.id, normalized_business_type, "Admin")
     database.commit()
 
     return {
