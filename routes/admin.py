@@ -780,12 +780,18 @@ def dashboard(database=Depends(db)):
     prev_moc_icd_profit = prev_moc_icd_sales * 0.14
     prev_moc_profit = prev_moc_margin - current_moc_expense_total - prev_moc_discount
     growth_percent = None
+    icd_growth_percent = None
     profit_growth_percent = None
     if previous_to_previous_moc and previous_to_previous_moc.total_sales:
         growth_percent = (
             (prev_moc_sales - previous_to_previous_moc.total_sales)
             / previous_to_previous_moc.total_sales
         ) * 100
+        if previous_to_previous_moc.total_icd_sales:
+            icd_growth_percent = (
+                (prev_moc_icd_sales - previous_to_previous_moc.total_icd_sales)
+                / previous_to_previous_moc.total_icd_sales
+            ) * 100
         previous_to_previous_margin = previous_to_previous_moc.total_sales * 0.039
         previous_to_previous_profit = (
             previous_to_previous_margin
@@ -815,6 +821,7 @@ def dashboard(database=Depends(db)):
         "prev_moc_icd_profit": prev_moc_icd_profit,
         "prev_moc_profit": prev_moc_profit,
         "prev_moc_growth_percent": growth_percent,
+        "prev_moc_icd_growth_percent": icd_growth_percent,
         "prev_moc_profit_growth_percent": profit_growth_percent,
         "expense_breakdown": current_month_breakdown,
         "recent_expenses": recent_expenses,
