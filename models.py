@@ -176,6 +176,25 @@ class PaymentRequest(Base):
     business_type = Column(String, default="mainline", nullable=False)
 
 
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+    __table_args__ = {"schema": SCHEMA_NAME}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    shop_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.shops.id"), nullable=False)
+    amount = Column(Float, nullable=False)
+    applied_amount = Column(Float, nullable=False)
+    unapplied_amount = Column(Float, nullable=False, default=0)
+    payment_time = Column(DateTime, nullable=False, default=datetime.utcnow)
+    received_by = Column(String, nullable=True)
+    allocation_mode = Column(String, default="oldest", nullable=False)
+    allocations_json = Column(String, nullable=True)
+    source = Column(String, nullable=False, default="direct")
+    source_request_id = Column(Integer, ForeignKey(f"{SCHEMA_NAME}.payment_requests.id"), nullable=True)
+    business_type = Column(String, default="mainline", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class PaymentFollowUp(Base):
     __tablename__ = "payment_followups"
     __table_args__ = {"schema": SCHEMA_NAME}
