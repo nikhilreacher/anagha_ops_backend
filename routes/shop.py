@@ -22,12 +22,19 @@ def require_finite_number(value: float, detail: str) -> float:
     return value
 
 
-def normalize_icd_bill_no(database, bill_no: str | None, shop_id: int):
+def normalize_prefixed_icd_bill_no(bill_no: str | None) -> str:
     value = (bill_no or "").strip()
     if not value:
-        value = f"NA-ICD-IT-{shop_id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
-    elif not value.upper().startswith("ICD-") and not value.upper().startswith("NA-ICD-"):
+        return ""
+    if not value.upper().startswith("ICD-") and not value.upper().startswith("NA-ICD-"):
         value = f"ICD-{value}"
+    return value
+
+
+def normalize_icd_bill_no(database, bill_no: str | None, shop_id: int):
+    value = normalize_prefixed_icd_bill_no(bill_no)
+    if not value:
+        value = f"NA-ICD-IT-{shop_id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
 
     candidate = value
     suffix = 2
@@ -62,6 +69,21 @@ def now_ist():
     return datetime.now(IST).replace(tzinfo=None)
 
 
+def serialize_icd_credit_row(ledger, shop):
+    return {
+        "bill_no": ledger.bill_no,
+        "shop_id": ledger.shop_id,
+        "shop": shop.name if shop else ledger.party,
+        "beat": ledger.beat_name or (shop.beat if shop else None),
+        "bill_date": ledger.bill_date.date().isoformat() if ledger.bill_date else None,
+        "delivery_date": ledger.delivery_date.date().isoformat() if ledger.delivery_date else None,
+        "bill_amt": ledger.bill_amt or 0,
+        "paid_amt": ledger.paid_amt or 0,
+        "balance": ledger.balance or 0,
+        "remarks": ledger.remarks,
+    }
+
+
 def sum_expenses_in_range(database, start_date: datetime, end_date: datetime):
     rows = (
         database.query(Expense)
@@ -93,6 +115,29 @@ def get_icd_credit_shops(beat: str = "", search: str = "", database=Depends(db))
     ]
 
 
+@router.get("/icd-credit/by-bill")
+def get_icd_credit_by_bill(bill_no: str, database=Depends(db)):
+    normalized_bill_no = normalize_prefixed_icd_bill_no(bill_no)
+    if not normalized_bill_no:
+        raise HTTPException(status_code=400, detail="Bill number is required")
+
+    row = (
+        database.query(Ledger, Shop)
+        .outerjoin(Shop, Shop.id == Ledger.shop_id)
+        .filter(Ledger.business_type == "icd")
+        .filter(func.lower(Ledger.bill_no) == normalized_bill_no.lower())
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="ICD bill not found")
+
+    ledger, shop = row
+    return {
+        "status": "ok",
+        "ledger": serialize_icd_credit_row(ledger, shop),
+    }
+
+
 @router.post("/icd-credit")
 def add_icd_credit(
     shop_id: int,
@@ -103,6 +148,7 @@ def add_icd_credit(
     delivery_date: str = "",
     remarks: str = "",
     created_by: str = "",
+    edit_existing: bool = False,
     database=Depends(db),
 ):
     require_finite_number(bill_amt, "Bill amount must be a valid number")
@@ -123,35 +169,70 @@ def add_icd_credit(
     if not shop:
         raise HTTPException(status_code=404, detail="ICD shop not found")
 
-    final_bill_no = normalize_icd_bill_no(database, bill_no, shop.id)
+    normalized_bill_no = normalize_prefixed_icd_bill_no(bill_no)
+    existing_row = None
+    if normalized_bill_no:
+        existing_row = (
+            database.query(Ledger)
+            .filter(Ledger.business_type == "icd")
+            .filter(func.lower(Ledger.bill_no) == normalized_bill_no.lower())
+            .first()
+        )
     parsed_bill_date = datetime.strptime(bill_date, "%Y-%m-%d") if bill_date else datetime.utcnow()
     parsed_delivery_date = datetime.strptime(delivery_date, "%Y-%m-%d") if delivery_date else parsed_bill_date
     final_remarks = remarks.strip() if remarks else ""
+    action_label = "Updated by" if existing_row and edit_existing else "Added by"
     if created_by.strip():
-        final_remarks = f"{final_remarks} | Added by {created_by.strip()}".strip(" |")
+        final_remarks = f"{final_remarks} | {action_label} {created_by.strip()}".strip(" |")
 
-    row = Ledger(
-        bill_no=final_bill_no,
-        dispatch_id=None,
-        shop_id=shop.id,
-        party=shop.name,
-        bill_date=parsed_bill_date,
-        delivery_date=parsed_delivery_date,
-        beat_name=shop.beat,
-        salesman=None,
-        bill_amt=bill_amt,
-        paid_amt=paid_amt,
-        balance=bill_amt - paid_amt,
-        paid_date=parsed_delivery_date if paid_amt > 0 else None,
-        remarks=final_remarks or None,
-        business_type="icd",
-    )
-    database.add(row)
+    if existing_row and not edit_existing:
+        existing_shop = database.query(Shop).filter(Shop.id == existing_row.shop_id).first() if existing_row.shop_id else None
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Entry for this bill number already exists",
+                "existing": serialize_icd_credit_row(existing_row, existing_shop),
+            },
+        )
+
+    if existing_row and edit_existing:
+        row = existing_row
+        row.shop_id = shop.id
+        row.party = shop.name
+        row.bill_date = parsed_bill_date
+        row.delivery_date = parsed_delivery_date
+        row.beat_name = shop.beat
+        row.bill_amt = bill_amt
+        row.paid_amt = paid_amt
+        row.balance = bill_amt - paid_amt
+        row.paid_date = parsed_delivery_date if paid_amt > 0 else None
+        row.remarks = final_remarks or None
+        row.business_type = "icd"
+    else:
+        final_bill_no = normalize_icd_bill_no(database, normalized_bill_no, shop.id)
+        row = Ledger(
+            bill_no=final_bill_no,
+            dispatch_id=None,
+            shop_id=shop.id,
+            party=shop.name,
+            bill_date=parsed_bill_date,
+            delivery_date=parsed_delivery_date,
+            beat_name=shop.beat,
+            salesman=None,
+            bill_amt=bill_amt,
+            paid_amt=paid_amt,
+            balance=bill_amt - paid_amt,
+            paid_date=parsed_delivery_date if paid_amt > 0 else None,
+            remarks=final_remarks or None,
+            business_type="icd",
+        )
+        database.add(row)
     database.commit()
     database.refresh(row)
 
     return {
         "status": "ok",
+        "mode": "updated" if existing_row and edit_existing else "created",
         "ledger": {
             "bill_no": row.bill_no,
             "shop_id": row.shop_id,
@@ -176,21 +257,7 @@ def get_recent_icd_credit_entries(limit: int = 10, database=Depends(db)):
         .all()
     )
 
-    return [
-        {
-            "bill_no": ledger.bill_no,
-            "shop_id": ledger.shop_id,
-            "shop": shop.name if shop else ledger.party,
-            "beat": ledger.beat_name or (shop.beat if shop else None),
-            "bill_date": ledger.bill_date.date().isoformat() if ledger.bill_date else None,
-            "delivery_date": ledger.delivery_date.date().isoformat() if ledger.delivery_date else None,
-            "bill_amt": ledger.bill_amt or 0,
-            "paid_amt": ledger.paid_amt or 0,
-            "balance": ledger.balance or 0,
-            "remarks": ledger.remarks,
-        }
-        for ledger, shop in rows
-    ]
+    return [serialize_icd_credit_row(ledger, shop) for ledger, shop in rows]
 
 @router.get("/")
 def get_shops(database=Depends(db)):
