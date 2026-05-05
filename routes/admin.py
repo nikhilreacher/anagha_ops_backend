@@ -95,6 +95,7 @@ def get_credit_summary(database, business_type: str = "mainline"):
                 "shop_id": shop.id,
                 "shop": shop.name,
                 "beat": shop.beat,
+                "phone": shop.phone,
                 "outstanding": 0,
                 "max_age": 0,
                 "bill_count": 0,
