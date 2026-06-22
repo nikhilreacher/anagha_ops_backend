@@ -63,6 +63,8 @@ def serialize_credit_bill(row):
         "bill_no": row.bill_no,
         "bill_date": bill_date.date().isoformat() if bill_date else None,
         "delivery_date": delivery_date.date().isoformat() if delivery_date else None,
+        "bill_amount": row.bill_amt or 0,
+        "paid_amount": row.paid_amt or 0,
         "balance": row.balance or 0,
         "remarks": row.remarks,
     }
